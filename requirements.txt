@@ -1,0 +1,8 @@
+APScheduler>=3.10,<4
+Flask>=3.0,<4
+PyYAML>=6.0,<7
+anthropic>=0.52,<1
+lxml>=5.2,<6
+pandas>=2.2,<3
+pandas_market_calendars>=4.4,<5
+requests>=2.32,<3

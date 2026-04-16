@@ -1,0 +1,29 @@
+# Required
+anthropic_api_key: ""
+alpaca_api_key: ""
+alpaca_secret_key: ""
+newsapi_key: ""
+report_email: ""
+gmail_client_id: ""
+gmail_client_secret: ""
+gmail_refresh_token: ""
+
+# Optional providers
+stocktwits_api_key: ""
+reddit_client_id: ""
+reddit_client_secret: ""
+
+# Runtime behavior
+anthropic_model: "claude-3-5-haiku-latest"
+universe: "sp500"                  # sp500 | nasdaq100
+blocklist: []                      # tickers to never trigger on
+drop_threshold_pct: 7              # % drop from intraday high to trigger
+trigger_cooldown_hours: 4          # per-ticker cooldown after trigger
+poll_interval_minutes: 5           # how often price monitor runs
+max_hold_days: 30                  # auto-close hypothetical positions after N days
+target_return_pct: 15              # auto-close on reaching this return
+daily_api_call_budget: 20          # max Claude API calls per day
+dashboard_port: 8080               # localhost dashboard port
+max_learned_prompt_tokens: 2000    # guardrail on classifier_prompt.md length
+unusual_whales_enabled: false      # optional Tier 3 smart-money signal
+gmail_sender_email: ""             # optional, defaults to report_email

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+data/
+*.db
+*.sqlite3
+logs/
+config.yaml
+classifier_prompt.md
+findings.md
