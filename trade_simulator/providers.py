@@ -12,10 +12,22 @@ from typing import Any
 import pandas as pd
 import requests
 from anthropic import Anthropic
+from requests import HTTPError
 
 from .config import AppConfig
 from .market import EASTERN
 from .utils import chunked, with_retry
+
+
+def _raise_for_status(response: requests.Response) -> None:
+    try:
+        response.raise_for_status()
+    except HTTPError as exc:
+        body = response.text[:500]
+        raise HTTPError(
+            f"{exc} — response body: {body!r}",
+            response=response,
+        ) from exc
 
 
 class UniverseProvider:
@@ -37,13 +49,13 @@ class UniverseProvider:
             component="universe_fetch",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         tables = pd.read_html(StringIO(response.text))
         if universe == "sp500":
             table = tables[0]
             return [
                 {
-                    "ticker": ticker.replace(".", "-"),
+                    "ticker": ticker,
                     "company_name": security,
                 }
                 for ticker, security in zip(table["Symbol"], table["Security"], strict=True)
@@ -52,7 +64,7 @@ class UniverseProvider:
             if {"Ticker", "Company"}.issubset(set(table.columns)):
                 return [
                     {
-                        "ticker": ticker.replace(".", "-"),
+                        "ticker": ticker,
                         "company_name": company,
                     }
                     for ticker, company in zip(table["Ticker"], table["Company"], strict=True)
@@ -78,7 +90,7 @@ class AlpacaDataClient:
             params={"symbols": "AAPL", "feed": "iex"},
             timeout=30,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
 
     def fetch_intraday_state(
         self,
@@ -108,7 +120,7 @@ class AlpacaDataClient:
                 component="alpaca_intraday",
                 logger=self.logger,
             )
-            response.raise_for_status()
+            _raise_for_status(response)
             bars = response.json().get("bars", {})
             for ticker, ticker_bars in bars.items():
                 if not ticker_bars:
@@ -131,7 +143,7 @@ class AlpacaDataClient:
             component="alpaca_latest_price",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         payload = response.json().get("bars", {})
         if ticker not in payload:
             raise RuntimeError(f"No latest price returned for {ticker}")
@@ -159,7 +171,7 @@ class AlpacaDataClient:
                 component="alpaca_eod_prices",
                 logger=self.logger,
             )
-            response.raise_for_status()
+            _raise_for_status(response)
             bars = response.json().get("bars", {})
             for ticker, ticker_bars in bars.items():
                 if ticker_bars:
@@ -185,7 +197,7 @@ class GoogleNewsClient:
             component="google_news",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         root = ET.fromstring(response.text)
         entries: list[dict[str, str]] = []
         for item in root.findall(".//item")[:5]:
@@ -212,7 +224,7 @@ class NewsApiClient:
             params={"q": "AAPL", "pageSize": 1, "apiKey": self.api_key},
             timeout=30,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         payload = response.json()
         if payload.get("status") != "ok":
             raise RuntimeError(f"NewsAPI validation failed: {payload}")
@@ -233,7 +245,7 @@ class NewsApiClient:
             component="newsapi_fetch",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         payload = response.json()
         articles = payload.get("articles", [])
         return [
@@ -264,7 +276,7 @@ class EdgarClient:
             component="sec_mapping",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         payload = response.json()
         self._ticker_map = {
             value["ticker"].upper(): str(value["cik_str"]).zfill(10)
@@ -281,7 +293,7 @@ class EdgarClient:
             component="sec_filings",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         payload = response.json()
         recent = payload.get("filings", {}).get("recent", {})
         forms = recent.get("form", [])
@@ -319,7 +331,7 @@ class StocktwitsClient:
             component="stocktwits_fetch",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         payload = response.json()
         messages = payload.get("messages", [])
         return [
@@ -363,7 +375,7 @@ class RedditClient:
             component="reddit_token",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         payload = response.json()
         self._token = payload["access_token"]
         self._token_expires_at = datetime.now(EASTERN) + timedelta(seconds=int(payload["expires_in"]) - 60)
@@ -392,7 +404,7 @@ class RedditClient:
                 component=f"reddit_fetch_{subreddit}",
                 logger=self.logger,
             )
-            response.raise_for_status()
+            _raise_for_status(response)
             posts = response.json().get("data", {}).get("children", [])
             for post in posts:
                 data = post.get("data", {})
@@ -426,7 +438,7 @@ class AnthropicClassifierClient:
             },
             timeout=30,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
 
     def classify(self, *, system_prompt: str, user_prompt: str) -> str:
         response = with_retry(
@@ -476,7 +488,7 @@ class GmailClient:
             component="gmail_refresh_token",
             logger=self.logger,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         payload = response.json()
         self._access_token = payload["access_token"]
         self._access_token_expires_at = time.time() + int(payload.get("expires_in", 3600))
