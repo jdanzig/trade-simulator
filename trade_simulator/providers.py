@@ -42,6 +42,15 @@ class UniverseProvider:
         self.session.headers.update({"User-Agent": "trade-simulator/1.0"})
 
     def fetch(self, universe: str) -> list[dict[str, str]]:
+        if universe == "both":
+            seen: set[str] = set()
+            combined: list[dict[str, str]] = []
+            for u in ("sp500", "nasdaq100"):
+                for entry in self.fetch(u):
+                    if entry["ticker"] not in seen:
+                        seen.add(entry["ticker"])
+                        combined.append(entry)
+            return combined
         if universe not in self.SOURCES:
             raise ValueError(f"Unsupported universe: {universe}")
         response = with_retry(

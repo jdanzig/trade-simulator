@@ -15,7 +15,7 @@ reddit_client_secret: ""
 
 # Runtime behavior
 anthropic_model: "claude-3-5-haiku-latest"
-universe: "sp500"                  # sp500 | nasdaq100
+universe: "sp500"                  # sp500 | nasdaq100 | both
 blocklist: []                      # tickers to never trigger on
 drop_threshold_pct: 7              # % drop from intraday high to trigger
 trigger_cooldown_hours: 4          # per-ticker cooldown after trigger

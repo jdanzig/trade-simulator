@@ -82,8 +82,8 @@ class AppConfig:
         if missing:
             joined = ", ".join(missing)
             raise ConfigError(f"Missing required config values: {joined}")
-        if self.universe not in {"sp500", "nasdaq100"}:
-            raise ConfigError("universe must be one of: sp500, nasdaq100")
+        if self.universe not in {"sp500", "nasdaq100", "both"}:
+            raise ConfigError("universe must be one of: sp500, nasdaq100, both")
         if self.poll_interval_minutes <= 0:
             raise ConfigError("poll_interval_minutes must be positive")
         if self.daily_api_call_budget <= 0:
