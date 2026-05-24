@@ -50,11 +50,5 @@ class MarketClock:
         market_close = session["market_close"].tz_convert(self.timezone).to_pydatetime()
         return market_open, market_close
 
-    def scheduled_report_time(self, current_date: date) -> datetime:
-        return datetime.combine(current_date, time(hour=16, minute=5), tzinfo=self.timezone)
-
-    def weekly_findings_time(self, current_date: date) -> datetime:
-        return datetime.combine(current_date, time(hour=17, minute=0), tzinfo=self.timezone)
-
     def recheck_time(self, triggered_at: datetime) -> datetime:
         return triggered_at.astimezone(self.timezone) + timedelta(hours=2)

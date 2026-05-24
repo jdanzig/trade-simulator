@@ -21,11 +21,9 @@ from .news import NewsFetcher
 from .providers import (
     AlpacaDataClient,
     AnthropicClassifierClient,
-    GmailClient,
     NewsApiClient,
     UniverseProvider,
 )
-from .reporting import ReportingService
 from .simulation import SimulationService
 
 
@@ -66,8 +64,6 @@ class TradeSimulatorApp:
         self.paths.data_dir.mkdir(parents=True, exist_ok=True)
         if not self.paths.classifier_prompt_path.exists():
             self.paths.classifier_prompt_path.write_text(build_default_classifier_prompt())
-        if not self.paths.findings_path.exists():
-            self.paths.findings_path.write_text("# Weekly Findings\n")
 
         self.config = load_config(self.paths)
         self.db = Database(self.paths.database_path)
@@ -77,7 +73,6 @@ class TradeSimulatorApp:
         self.market_data = AlpacaDataClient(self.config, self.logger)
         self.newsapi = NewsApiClient(self.config, self.logger)
         self.anthropic_client = AnthropicClassifierClient(self.config, self.logger)
-        self.gmail = GmailClient(self.config, self.logger)
         self.news_fetcher = NewsFetcher(self.config, self.db, self.logger)
         self.classifier = ClassifierService(
             self.config,
@@ -86,12 +81,6 @@ class TradeSimulatorApp:
             self.logger,
         )
         self.simulation = SimulationService(self.config, self.db, self.market_data, self.logger)
-        self.reporting = ReportingService(
-            self.db,
-            self.gmail,
-            self.paths.classifier_prompt_path,
-            self.paths.findings_path,
-        )
         self.dashboard = DashboardServer(self.db, self.config.dashboard_port)
 
     def validate_startup(self) -> None:
@@ -99,7 +88,6 @@ class TradeSimulatorApp:
         self.market_data.validate()
         self.newsapi.validate()
         self.anthropic_client.validate()
-        self.gmail.validate()
 
     def run(self) -> None:
         self.validate_startup()
@@ -132,15 +120,8 @@ class TradeSimulatorApp:
         self.scheduler.add_job(
             self._safe_run,
             CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone=EASTERN.key),
-            kwargs={"component": "daily_report", "fn": self.daily_report_job},
-            id="daily_report",
-            replace_existing=True,
-        )
-        self.scheduler.add_job(
-            self._safe_run,
-            CronTrigger(day_of_week="sun", hour=17, minute=0, timezone=EASTERN.key),
-            kwargs={"component": "weekly_findings", "fn": self.weekly_findings_job},
-            id="weekly_findings",
+            kwargs={"component": "eod_update", "fn": self.eod_update_job},
+            id="eod_update",
             replace_existing=True,
         )
         self.scheduler.add_job(
@@ -282,21 +263,12 @@ class TradeSimulatorApp:
         self.db.save_classification(trigger_id, finalized)
         self.simulation.maybe_open_position(trigger, finalized, now)
 
-    def daily_report_job(self) -> None:
+    def eod_update_job(self) -> None:
         today = self.clock.now().date()
         if not self.clock.is_trading_day(today):
             return
         self.simulation.update_positions(today)
-        self.reporting.send_daily_report(today)
-        self.db.set_state("last_daily_report_date", today.isoformat())
-        self.logger.info("Daily report sent for %s", today)
-
-    def weekly_findings_job(self) -> None:
-        today = self.clock.now().date()
-        findings_block = self.reporting.append_weekly_findings(today)
-        self.reporting.send_weekly_findings_email(today, findings_block)
-        self.db.set_state("last_findings_run", today.isoformat())
-        self.logger.info("Weekly findings written and emailed for %s", today)
+        self.logger.info("EOD position update complete for %s", today)
 
 
 def create_app(base_dir: Path) -> TradeSimulatorApp:

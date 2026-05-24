@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import base64
 import logging
 import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from email.message import EmailMessage
 from io import StringIO
 from typing import Any
 
@@ -273,8 +271,7 @@ class EdgarClient:
     def __init__(self, config: AppConfig, logger: logging.Logger):
         self.logger = logger
         self.session = requests.Session()
-        contact = config.report_email or "contact@example.com"
-        self.session.headers.update({"User-Agent": f"trade-simulator/1.0 {contact}"})
+        self.session.headers.update({"User-Agent": "trade-simulator/1.0"})
         self._ticker_map: dict[str, str] | None = None
 
     def _load_mapping(self) -> dict[str, str]:
@@ -466,75 +463,6 @@ class AnthropicClassifierClient:
             if getattr(block, "type", None) == "text":
                 text_chunks.append(block.text)
         return "\n".join(text_chunks).strip()
-
-
-class GmailClient:
-    def __init__(self, config: AppConfig, logger: logging.Logger):
-        self.logger = logger
-        self.report_email = config.report_email
-        self.from_email = config.gmail_sender_email or config.report_email
-        self.client_id = config.gmail_client_id
-        self.client_secret = config.gmail_client_secret
-        self.refresh_token = config.gmail_refresh_token
-        self.session = requests.Session()
-        self._access_token: str | None = None
-        self._access_token_expires_at = 0.0
-
-    def _refresh_access_token(self) -> str:
-        if self._access_token and time.time() < self._access_token_expires_at - 60:
-            return self._access_token
-        response = with_retry(
-            lambda: self.session.post(
-                "https://oauth2.googleapis.com/token",
-                data={
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "refresh_token": self.refresh_token,
-                    "grant_type": "refresh_token",
-                },
-                timeout=30,
-            ),
-            component="gmail_refresh_token",
-            logger=self.logger,
-        )
-        _raise_for_status(response)
-        payload = response.json()
-        self._access_token = payload["access_token"]
-        self._access_token_expires_at = time.time() + int(payload.get("expires_in", 3600))
-        return self._access_token
-
-    def _auth_headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self._refresh_access_token()}",
-            "Content-Type": "application/json",
-        }
-
-    def validate(self) -> None:
-        # `gmail.send` is sufficient for delivery but not for reading the mailbox profile.
-        # Startup only needs to confirm that the OAuth credentials can mint an access token.
-        self._refresh_access_token()
-
-    def send_markdown(self, subject: str, body: str) -> None:
-        message = EmailMessage()
-        message["To"] = self.report_email
-        message["From"] = self.from_email
-        message["Subject"] = subject
-        message.set_content(body)
-        payload = {
-            "raw": base64.urlsafe_b64encode(message.as_bytes()).decode("ascii"),
-        }
-        response = with_retry(
-            lambda: self.session.post(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                headers=self._auth_headers(),
-                json=payload,
-                timeout=30,
-            ),
-            component="gmail_send",
-            logger=self.logger,
-        )
-        if response.status_code >= 300:
-            raise RuntimeError(f"Gmail send failed: {response.status_code} {response.text}")
 
 
 def summarize_retail_sentiment(items: list[dict[str, str]]) -> str:

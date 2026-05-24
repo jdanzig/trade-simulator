@@ -18,7 +18,6 @@ class AppPaths:
     data_dir: Path
     database_path: Path
     classifier_prompt_path: Path
-    findings_path: Path
 
     @classmethod
     def from_base_dir(cls, base_dir: Path) -> "AppPaths":
@@ -29,7 +28,6 @@ class AppPaths:
             data_dir=data_dir,
             database_path=data_dir / "trade_simulator.sqlite3",
             classifier_prompt_path=base_dir / "classifier_prompt.md",
-            findings_path=base_dir / "findings.md",
         )
 
 
@@ -39,11 +37,6 @@ class AppConfig:
     alpaca_api_key: str
     alpaca_secret_key: str
     newsapi_key: str
-    report_email: str
-    gmail_client_id: str
-    gmail_client_secret: str
-    gmail_refresh_token: str
-    gmail_sender_email: str = ""
     stocktwits_api_key: str = ""
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
@@ -73,10 +66,6 @@ class AppConfig:
             "alpaca_api_key": self.alpaca_api_key,
             "alpaca_secret_key": self.alpaca_secret_key,
             "newsapi_key": self.newsapi_key,
-            "report_email": self.report_email,
-            "gmail_client_id": self.gmail_client_id,
-            "gmail_client_secret": self.gmail_client_secret,
-            "gmail_refresh_token": self.gmail_refresh_token,
         }
         missing = [name for name, value in required.items() if not str(value).strip()]
         if missing:
