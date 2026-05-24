@@ -575,6 +575,83 @@ class Database:
             "inception": round(float(all_positions["avg_all"] or 0.0), 2),
         }
 
+    def list_open_positions_with_classification(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.*, c.cause_category, c.confidence, c.cause_summary, c.recommendation
+                FROM hypothetical_positions p
+                LEFT JOIN classifications c
+                  ON c.trigger_id = p.trigger_id
+                 AND c.pass_number = 2
+                WHERE p.status = 'open'
+                ORDER BY p.entry_timestamp
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_recent_closed_positions(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.*, c.cause_category, c.confidence, c.cause_summary
+                FROM hypothetical_positions p
+                LEFT JOIN classifications c
+                  ON c.trigger_id = p.trigger_id
+                 AND c.pass_number = 2
+                WHERE p.status = 'closed'
+                ORDER BY p.updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_recent_triggers(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT t.*, c.cause_category, c.confidence, c.recommendation, c.cause_summary,
+                       c.overreaction_score,
+                       p.id AS position_id, p.hypothetical_pnl_pct AS position_pnl_pct
+                FROM triggers t
+                LEFT JOIN classifications c
+                  ON c.trigger_id = t.id AND c.pass_number = 2
+                LEFT JOIN hypothetical_positions p ON p.trigger_id = t.id
+                ORDER BY t.triggered_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def portfolio_summary(self) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_trades,
+                    SUM(CASE WHEN status = 'closed' AND hypothetical_pnl_pct > 0 THEN 1 ELSE 0 END) AS winners,
+                    SUM(CASE WHEN status = 'closed' AND hypothetical_pnl_pct <= 0 THEN 1 ELSE 0 END) AS losers,
+                    SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_count,
+                    AVG(CASE WHEN status = 'closed' THEN hypothetical_pnl_pct END) AS avg_closed_pnl,
+                    AVG(CASE WHEN status = 'open' THEN hypothetical_pnl_pct END) AS avg_open_pnl,
+                    MAX(CASE WHEN status = 'closed' THEN hypothetical_pnl_pct END) AS best_trade,
+                    MIN(CASE WHEN status = 'closed' THEN hypothetical_pnl_pct END) AS worst_trade
+                FROM hypothetical_positions
+                """
+            ).fetchone()
+        d = dict(row)
+        winners = d["winners"] or 0
+        losers = d["losers"] or 0
+        closed = winners + losers
+        d["win_rate_pct"] = round((winners / closed) * 100, 1) if closed else None
+        d["avg_closed_pnl"] = round(float(d["avg_closed_pnl"] or 0), 2)
+        d["avg_open_pnl"] = round(float(d["avg_open_pnl"] or 0), 2)
+        d["best_trade"] = round(float(d["best_trade"] or 0), 2)
+        d["worst_trade"] = round(float(d["worst_trade"] or 0), 2)
+        return d
+
     def list_closed_positions_since(self, start_date: date) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
