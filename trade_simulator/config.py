@@ -41,7 +41,7 @@ class AppConfig:
     stocktwits_api_key: str = ""
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
-    anthropic_model: str = "claude-3-5-haiku-latest"
+    anthropic_model: str = "claude-haiku-4-5-20251001"
     universe: str = "sp500"
     blocklist: list[str] = field(default_factory=list)
     drop_threshold_pct: float = 7.0

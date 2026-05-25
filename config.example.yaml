@@ -11,7 +11,7 @@ reddit_client_id: ""
 reddit_client_secret: ""
 
 # Runtime behavior
-anthropic_model: "claude-3-5-haiku-latest"
+anthropic_model: "claude-haiku-4-5-20251001"
 universe: "both"                   # sp500 | nasdaq100 | both
 blocklist: []                      # tickers to never trigger on
 drop_threshold_pct: 7              # % drop from intraday high to trigger
