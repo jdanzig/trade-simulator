@@ -5,6 +5,7 @@ alpaca_secret_key: ""
 newsapi_key: ""
 
 # Optional providers
+ntfy_topic: ""                     # ntfy.sh topic for push notifications (e.g. "my-dip-alerts")
 stocktwits_api_key: ""
 reddit_client_id: ""
 reddit_client_secret: ""

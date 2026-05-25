@@ -37,6 +37,7 @@ class AppConfig:
     alpaca_api_key: str
     alpaca_secret_key: str
     newsapi_key: str
+    ntfy_topic: str = ""
     stocktwits_api_key: str = ""
     reddit_client_id: str = ""
     reddit_client_secret: str = ""

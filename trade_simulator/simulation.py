@@ -9,11 +9,12 @@ from .database import Database
 
 
 class SimulationService:
-    def __init__(self, config: AppConfig, db: Database, market_data_client, logger: logging.Logger):
+    def __init__(self, config: AppConfig, db: Database, market_data_client, logger: logging.Logger, ntfy=None):
         self.config = config
         self.db = db
         self.market_data_client = market_data_client
         self.logger = logger
+        self.ntfy = ntfy
 
     def maybe_open_position(self, trigger: dict[str, Any], second_pass: dict[str, Any], now: datetime) -> None:
         if second_pass["recommendation"] != "buy_candidate":
@@ -62,6 +63,13 @@ class SimulationService:
                 exit_price=exit_price,
                 exit_reason=exit_reason,
             )
+            if status == "closed" and self.ntfy:
+                self.ntfy.notify_position_closed(
+                    ticker=ticker,
+                    pnl_pct=pnl_pct,
+                    exit_reason=exit_reason,
+                    days_held=days_held,
+                )
             self.db.save_daily_snapshot(
                 position["id"],
                 trading_date,

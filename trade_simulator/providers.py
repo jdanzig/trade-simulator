@@ -465,6 +465,51 @@ class AnthropicClassifierClient:
         return "\n".join(text_chunks).strip()
 
 
+class NtfyClient:
+    BASE_URL = "https://ntfy.sh"
+
+    def __init__(self, topic: str, logger: logging.Logger):
+        self.topic = topic
+        self.logger = logger
+        self.session = requests.Session()
+
+    def _post(self, title: str, message: str, tags: list[str] | None = None, priority: str = "default") -> None:
+        if not self.topic:
+            return
+        headers: dict[str, str] = {
+            "Title": title,
+            "Priority": priority,
+        }
+        if tags:
+            headers["Tags"] = ",".join(tags)
+        try:
+            response = self.session.post(
+                f"{self.BASE_URL}/{self.topic}",
+                data=message.encode("utf-8"),
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("ntfy notification failed: %s", exc)
+
+    def notify_trigger(self, ticker: str, drop_pct: float, recommendation: str, confidence: str, summary: str) -> None:
+        emoji = {"buy_candidate": "🟢", "monitor": "🟡", "avoid": "🔴"}.get(recommendation, "⚪")
+        title = f"{emoji} {ticker} dropped {drop_pct:.1f}%"
+        message = f"{recommendation.upper()} ({confidence} confidence)\n{summary}"
+        tags = ["chart_with_downwards_trend"]
+        priority = "high" if recommendation == "buy_candidate" and confidence == "high" else "default"
+        self._post(title, message, tags=tags, priority=priority)
+
+    def notify_position_closed(self, ticker: str, pnl_pct: float, exit_reason: str, days_held: int) -> None:
+        emoji = "✅" if pnl_pct > 0 else "❌"
+        title = f"{emoji} {ticker} closed {pnl_pct:+.2f}%"
+        reason_label = {"target_reached": "hit target", "max_hold_exceeded": "max hold exceeded"}.get(exit_reason, exit_reason)
+        message = f"{reason_label} after {days_held}d"
+        tags = ["moneybag" if pnl_pct > 0 else "x"]
+        self._post(title, message, tags=tags)
+
+
 def summarize_retail_sentiment(items: list[dict[str, str]]) -> str:
     counts = defaultdict(int)
     for item in items:

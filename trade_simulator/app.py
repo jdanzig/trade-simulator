@@ -22,6 +22,7 @@ from .providers import (
     AlpacaDataClient,
     AnthropicClassifierClient,
     NewsApiClient,
+    NtfyClient,
     UniverseProvider,
 )
 from .simulation import SimulationService
@@ -73,6 +74,7 @@ class TradeSimulatorApp:
         self.market_data = AlpacaDataClient(self.config, self.logger)
         self.newsapi = NewsApiClient(self.config, self.logger)
         self.anthropic_client = AnthropicClassifierClient(self.config, self.logger)
+        self.ntfy = NtfyClient(self.config.ntfy_topic, self.logger)
         self.news_fetcher = NewsFetcher(self.config, self.db, self.logger)
         self.classifier = ClassifierService(
             self.config,
@@ -80,7 +82,7 @@ class TradeSimulatorApp:
             self.anthropic_client,
             self.logger,
         )
-        self.simulation = SimulationService(self.config, self.db, self.market_data, self.logger)
+        self.simulation = SimulationService(self.config, self.db, self.market_data, self.logger, ntfy=self.ntfy)
         self.dashboard = DashboardServer(self.db, self.config.dashboard_port)
 
     def validate_startup(self) -> None:
@@ -262,6 +264,13 @@ class TradeSimulatorApp:
         finalized = self.classifier.finalize_second_pass(first_pass, second_pass, now)
         self.db.save_classification(trigger_id, finalized)
         self.simulation.maybe_open_position(trigger, finalized, now)
+        self.ntfy.notify_trigger(
+            ticker=trigger["ticker"],
+            drop_pct=float(trigger["drop_pct"]),
+            recommendation=finalized.get("recommendation", ""),
+            confidence=finalized.get("confidence", ""),
+            summary=finalized.get("cause_summary", ""),
+        )
 
     def eod_update_job(self) -> None:
         today = self.clock.now().date()
