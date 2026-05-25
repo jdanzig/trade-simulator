@@ -343,9 +343,9 @@ class StocktwitsClient:
         return [
             {
                 "body": message.get("body", ""),
-                "sentiment": (message.get("entities", {}) or {})
-                .get("sentiment", {})
-                .get("basic", ""),
+                "sentiment": (
+                    (message.get("entities", {}) or {}).get("sentiment") or {}
+                ).get("basic", ""),
                 "published_at": message.get("created_at", ""),
                 "source": "stocktwits",
             }
