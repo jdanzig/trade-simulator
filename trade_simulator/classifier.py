@@ -67,11 +67,19 @@ class ClassifierService:
             f"Drop pct from intraday high: {-abs(float(trigger['drop_pct'])):.2f}\n"
             f"Pass: {pass_number}\n"
             f"News maturity: {news_maturity}\n\n"
-            "Required JSON schema keys:\n"
-            "ticker, triggered_at, drop_pct_from_intraday_high, news_maturity, pass, sources_used, "
-            "cause_summary, cause_category, affects_cash_flows, affects_cash_flows_reasoning, reversible, "
-            "reversible_reasoning, retail_sentiment, retail_sentiment_reasoning, smart_money_signal, "
-            "overreaction_score, overreaction_reasoning, recommendation, confidence, recheck_scheduled_at.\n\n"
+            "Required JSON schema keys and value constraints:\n"
+            "ticker (string), triggered_at (string), drop_pct_from_intraday_high (float), "
+            "news_maturity (string), pass (int), sources_used (list), "
+            "cause_summary (string), cause_category (string), "
+            "affects_cash_flows (bool), affects_cash_flows_reasoning (string), "
+            "reversible (bool), reversible_reasoning (string), "
+            "retail_sentiment (string), retail_sentiment_reasoning (string), "
+            "smart_money_signal (string), "
+            "overreaction_score (integer 0-10, where 10 = maximum overreaction), "
+            "overreaction_reasoning (string), "
+            "recommendation (one of: buy_candidate, monitor, avoid), "
+            "confidence (one of: low, medium, high), "
+            "recheck_scheduled_at (string or null).\n\n"
             f"Context:\n{formatted_context}"
         )
         raw_text = self.anthropic_client.classify(
@@ -85,6 +93,26 @@ class ClassifierService:
 
         normalized = dict(BASE_FIELDS)
         normalized.update(parsed)
+
+        # Coerce confidence to low/medium/high regardless of what Claude returned
+        raw_conf = str(normalized.get("confidence", "")).lower()
+        if raw_conf not in {"low", "medium", "high"}:
+            try:
+                f = float(raw_conf)
+                normalized["confidence"] = "high" if f >= 0.75 else "medium" if f >= 0.5 else "low"
+            except (ValueError, TypeError):
+                normalized["confidence"] = "low"
+
+        # Coerce overreaction_score to 0-10 int
+        try:
+            score = float(normalized.get("overreaction_score", 0))
+            # If Claude returned a 0-100 scale, convert it
+            if score > 10:
+                score = round(score / 10)
+            normalized["overreaction_score"] = max(0, min(10, int(round(score))))
+        except (ValueError, TypeError):
+            normalized["overreaction_score"] = 0
+
         normalized["ticker"] = trigger["ticker"]
         normalized["triggered_at"] = trigger["triggered_at"].isoformat()
         normalized["drop_pct_from_intraday_high"] = -abs(float(trigger["drop_pct"]))
