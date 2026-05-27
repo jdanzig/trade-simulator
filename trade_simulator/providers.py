@@ -503,15 +503,8 @@ class NtfyClient:
         priority = "high" if recommendation == "buy_candidate" and confidence == "high" else "default"
         self._post(title, message, tags=[tag, "chart_with_downwards_trend"], priority=priority)
 
-    def notify_startup(self, universe: str, ticker_count: int, open_positions: int, dashboard_port: int) -> None:
-        message = (
-            f"Universe: {universe} ({ticker_count} tickers)\n"
-            f"Open positions: {open_positions}\n"
-            f"Dashboard: http://127.0.0.1:{dashboard_port}"
-        )
-        self._post(title="Trade simulator started", message=message, tags=["rocket"])
-
-    def notify_eod_summary(self, today: str, summary: dict) -> None:
+    @staticmethod
+    def _format_summary_lines(summary: dict) -> list[str]:
         open_positions = summary.get("open_positions", [])
         closed_today = summary.get("closed_today", [])
         lines = [
@@ -534,11 +527,23 @@ class NtfyClient:
         else:
             lines.append("")
             lines.append("No open positions.")
+        return lines
+
+    def notify_startup(self, universe: str, ticker_count: int, dashboard_port: int, summary: dict) -> None:
+        lines = [
+            f"Universe: {universe} ({ticker_count} tickers)",
+            f"Dashboard: http://127.0.0.1:{dashboard_port}",
+            "",
+        ]
+        lines.extend(self._format_summary_lines(summary))
+        self._post(title="Trade simulator started", message="\n".join(lines), tags=["rocket"])
+
+    def notify_eod_summary(self, today: str, summary: dict) -> None:
         pnl = summary.get("pnl_today_sum", 0)
         tag = "chart_with_upwards_trend" if pnl > 0 else "chart_with_downwards_trend" if pnl < 0 else "bar_chart"
         self._post(
             title=f"EOD Summary — {today}",
-            message="\n".join(lines),
+            message="\n".join(self._format_summary_lines(summary)),
             tags=[tag],
         )
 

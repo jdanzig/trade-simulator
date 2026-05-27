@@ -105,8 +105,8 @@ class TradeSimulatorApp:
         self.ntfy.notify_startup(
             universe=self.config.universe,
             ticker_count=len(self.db.list_universe(self.config.universe)),
-            open_positions=len(self.db.list_open_positions()),
             dashboard_port=self.config.dashboard_port,
+            summary=self.db.eod_summary(self.clock.now().date()),
         )
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
