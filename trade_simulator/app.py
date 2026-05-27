@@ -180,9 +180,9 @@ class TradeSimulatorApp:
             session_start=market_open,
             session_end=now,
         )
-        # Refresh P&L on open positions and fill any pending entries at current price
+        # Refresh P&L on open positions and re-classify any pending entries before filling
         price_map = {t: m["current_price"] for t, m in intraday.items() if m.get("current_price")}
-        self.simulation.fill_pending_positions(price_map, now)
+        self._process_pending_positions(price_map, now)
         self.simulation.refresh_open_position_prices(price_map, now)
         todays_usage = self.db.get_today_api_usage(now.date())
         for ticker, metrics in intraday.items():
@@ -218,6 +218,50 @@ class TradeSimulatorApp:
             self._run_first_pass(trigger_id)
             self._schedule_second_pass(trigger_id, recheck_time)
         self.db.set_state("last_successful_monitor_run", now.isoformat())
+
+    def _process_pending_positions(self, prices: dict[str, float], now) -> None:
+        """Re-classify each pending position with fresh morning news before filling.
+
+        Matches the existing two-pass philosophy: don't trust an after-hours
+        classification once the overnight news cycle has run. If Claude still
+        says buy_candidate, fill at the current open price. Otherwise cancel.
+        """
+        pending = self.db.list_pending_positions()
+        if not pending:
+            return
+        for position in pending:
+            ticker = position["ticker"]
+            if ticker not in prices:
+                continue
+            trigger = self.db.get_trigger(position["trigger_id"])
+            if not trigger:
+                self.db.cancel_pending_position(position["id"], "trigger_missing")
+                continue
+            news_payload = self.news_fetcher.gather(ticker, trigger["triggered_at"])
+            formatted_context = self.news_fetcher.format_for_classifier(news_payload)
+            try:
+                third_pass = self.classifier.classify(
+                    trigger=trigger,
+                    pass_number=3,
+                    news_maturity="overnight_settled",
+                    news_payload=news_payload,
+                    formatted_context=formatted_context,
+                )
+            except ClassificationError as exc:
+                self.db.log_error("classifier", "pass3_classification_failed", repr(exc))
+                self.logger.exception("Pass 3 classification failed for %s", ticker)
+                continue
+            self.db.save_classification(position["trigger_id"], third_pass)
+            self.db.increment_today_api_usage(now.date(), 1)
+            if third_pass.get("recommendation") == "buy_candidate":
+                self.simulation.fill_pending_position(position["id"], ticker, prices[ticker], now)
+            else:
+                self.simulation.cancel_pending_position(
+                    position["id"],
+                    ticker,
+                    reason=f"thesis_changed_to_{third_pass.get('recommendation', 'unknown')}",
+                    summary=third_pass.get("cause_summary", ""),
+                )
 
     def _run_first_pass(self, trigger_id: str) -> None:
         trigger = self.db.get_trigger(trigger_id)

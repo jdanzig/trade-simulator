@@ -45,20 +45,25 @@ class SimulationService:
             self.db.log_error("simulation", f"Failed to create position for {ticker}", repr(exc))
             self.logger.exception("Failed to create position for %s", ticker)
 
-    def fill_pending_positions(self, prices: dict[str, float], now: datetime) -> None:
-        for position in self.db.list_pending_positions():
-            ticker = position["ticker"]
-            if ticker not in prices:
-                continue
-            entry_price = prices[ticker]
-            self.db.fill_pending_position(position["id"], entry_price, now)
-            self.logger.info("Filled pending position %s at %.2f", ticker, entry_price)
-            if self.ntfy:
-                self.ntfy._post(
-                    title=f"{ticker} filled at ${entry_price:.2f}",
-                    message="Queued buy executed at market open.",
-                    tags=["white_check_mark"],
-                )
+    def fill_pending_position(self, position_id: str, ticker: str, entry_price: float, now: datetime) -> None:
+        self.db.fill_pending_position(position_id, entry_price, now)
+        self.logger.info("Filled pending position %s at %.2f", ticker, entry_price)
+        if self.ntfy:
+            self.ntfy._post(
+                title=f"{ticker} filled at ${entry_price:.2f}",
+                message="Re-classified at open, thesis confirmed.",
+                tags=["white_check_mark"],
+            )
+
+    def cancel_pending_position(self, position_id: str, ticker: str, reason: str, summary: str) -> None:
+        self.db.cancel_pending_position(position_id, reason)
+        self.logger.info("Cancelled pending position %s: %s", ticker, reason)
+        if self.ntfy:
+            self.ntfy._post(
+                title=f"{ticker} cancelled — thesis changed",
+                message=f"Re-classified at open: {reason}\n{summary}",
+                tags=["no_entry_sign"],
+            )
 
     def refresh_open_position_prices(self, prices: dict[str, float], now: datetime) -> None:
         """Update current_price and P&L for open positions using already-fetched prices.

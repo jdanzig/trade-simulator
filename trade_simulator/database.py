@@ -418,6 +418,19 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def cancel_pending_position(self, position_id: str, reason: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE hypothetical_positions
+                SET status = 'cancelled',
+                    exit_reason = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'pending'
+                """,
+                (reason, position_id),
+            )
+
     def fill_pending_position(self, position_id: str, entry_price: float, entry_timestamp: datetime) -> None:
         with self.connect() as conn:
             conn.execute(
