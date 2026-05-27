@@ -180,8 +180,9 @@ class TradeSimulatorApp:
             session_start=market_open,
             session_end=now,
         )
-        # Refresh P&L on open positions using already-fetched intraday prices
+        # Refresh P&L on open positions and fill any pending entries at current price
         price_map = {t: m["current_price"] for t, m in intraday.items() if m.get("current_price")}
+        self.simulation.fill_pending_positions(price_map, now)
         self.simulation.refresh_open_position_prices(price_map, now)
         todays_usage = self.db.get_today_api_usage(now.date())
         for ticker, metrics in intraday.items():
@@ -272,7 +273,7 @@ class TradeSimulatorApp:
         first_pass = self.db.get_classification(trigger_id, 1)
         finalized = self.classifier.finalize_second_pass(first_pass, second_pass, now)
         self.db.save_classification(trigger_id, finalized)
-        self.simulation.maybe_open_position(trigger, finalized, now)
+        self.simulation.maybe_open_position(trigger, finalized, now, market_is_open=self.clock.market_is_open(now))
         self.ntfy.notify_trigger(
             ticker=trigger["ticker"],
             drop_pct=float(trigger["drop_pct"]),

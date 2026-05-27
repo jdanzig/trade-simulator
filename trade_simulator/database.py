@@ -380,7 +380,14 @@ class Database:
             results.append(payload)
         return results
 
-    def create_position(self, trigger_id: str, ticker: str, entry_price: float, entry_timestamp: datetime) -> str:
+    def create_position(
+        self,
+        trigger_id: str,
+        ticker: str,
+        entry_price: float,
+        entry_timestamp: datetime,
+        status: str = "open",
+    ) -> str:
         position_id = str(uuid.uuid4())
         with self.connect() as conn:
             conn.execute(
@@ -389,7 +396,7 @@ class Database:
                     id, ticker, trigger_id, hypothetical_entry_price, entry_timestamp,
                     current_price, hypothetical_pnl_pct, days_held, status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'open')
+                VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
                 ON CONFLICT(trigger_id) DO NOTHING
                 """,
                 (
@@ -399,9 +406,32 @@ class Database:
                     entry_price,
                     _as_eastern_iso(entry_timestamp),
                     entry_price,
+                    status,
                 ),
             )
         return position_id
+
+    def list_pending_positions(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM hypothetical_positions WHERE status = 'pending' ORDER BY entry_timestamp"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def fill_pending_position(self, position_id: str, entry_price: float, entry_timestamp: datetime) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE hypothetical_positions
+                SET hypothetical_entry_price = ?,
+                    current_price = ?,
+                    entry_timestamp = ?,
+                    status = 'open',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'pending'
+                """,
+                (entry_price, entry_price, _as_eastern_iso(entry_timestamp), position_id),
+            )
 
     def list_open_positions(self) -> list[dict[str, Any]]:
         with self.connect() as conn:

@@ -16,15 +16,49 @@ class SimulationService:
         self.logger = logger
         self.ntfy = ntfy
 
-    def maybe_open_position(self, trigger: dict[str, Any], second_pass: dict[str, Any], now: datetime) -> None:
+    def maybe_open_position(
+        self,
+        trigger: dict[str, Any],
+        second_pass: dict[str, Any],
+        now: datetime,
+        market_is_open: bool,
+    ) -> None:
         if second_pass["recommendation"] != "buy_candidate":
             return
-        entry_price = self.market_data_client.fetch_latest_price(trigger["ticker"])
+        ticker = trigger["ticker"]
         try:
-            self.db.create_position(trigger["id"], trigger["ticker"], entry_price, now)
+            if market_is_open:
+                entry_price = self.market_data_client.fetch_latest_price(ticker)
+                self.db.create_position(trigger["id"], ticker, entry_price, now, status="open")
+            else:
+                # Queue for fill at next market open — matches what a real retail
+                # trader would do (market-on-open order) rather than chasing
+                # thin after-hours liquidity.
+                self.db.create_position(trigger["id"], ticker, 0.0, now, status="pending")
+                if self.ntfy:
+                    self.ntfy._post(
+                        title=f"{ticker} queued for next open",
+                        message=f"Market closed at classification. Will fill at next open.",
+                        tags=["hourglass_flowing_sand"],
+                    )
         except Exception as exc:  # noqa: BLE001
-            self.db.log_error("simulation", f"Failed to create position for {trigger['ticker']}", repr(exc))
-            self.logger.exception("Failed to create position for %s", trigger["ticker"])
+            self.db.log_error("simulation", f"Failed to create position for {ticker}", repr(exc))
+            self.logger.exception("Failed to create position for %s", ticker)
+
+    def fill_pending_positions(self, prices: dict[str, float], now: datetime) -> None:
+        for position in self.db.list_pending_positions():
+            ticker = position["ticker"]
+            if ticker not in prices:
+                continue
+            entry_price = prices[ticker]
+            self.db.fill_pending_position(position["id"], entry_price, now)
+            self.logger.info("Filled pending position %s at %.2f", ticker, entry_price)
+            if self.ntfy:
+                self.ntfy._post(
+                    title=f"{ticker} filled at ${entry_price:.2f}",
+                    message="Queued buy executed at market open.",
+                    tags=["white_check_mark"],
+                )
 
     def refresh_open_position_prices(self, prices: dict[str, float], now: datetime) -> None:
         """Update current_price and P&L for open positions using already-fetched prices.
