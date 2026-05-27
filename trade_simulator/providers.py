@@ -477,8 +477,10 @@ class NtfyClient:
     def _post(self, title: str, message: str, tags: list[str] | None = None, priority: str = "default") -> None:
         if not self.topic:
             return
+        # HTTP headers default to latin-1; strip non-ASCII from title to be safe
+        safe_title = title.encode("ascii", errors="ignore").decode("ascii")
         headers: dict[str, str] = {
-            "Title": title,
+            "Title": safe_title,
             "Priority": priority,
         }
         if tags:
@@ -495,19 +497,17 @@ class NtfyClient:
             self.logger.warning("ntfy notification failed: %s", exc)
 
     def notify_trigger(self, ticker: str, drop_pct: float, recommendation: str, confidence: str, summary: str) -> None:
-        emoji = {"buy_candidate": "🟢", "monitor": "🟡", "avoid": "🔴"}.get(recommendation, "⚪")
-        title = f"{emoji} {ticker} dropped {drop_pct:.1f}%"
+        title = f"{ticker} dropped {drop_pct:.1f}%"
         message = f"{recommendation.upper()} ({confidence} confidence)\n{summary}"
-        tags = ["chart_with_downwards_trend"]
+        tag = {"buy_candidate": "green_circle", "monitor": "yellow_circle", "avoid": "red_circle"}.get(recommendation, "white_circle")
         priority = "high" if recommendation == "buy_candidate" and confidence == "high" else "default"
-        self._post(title, message, tags=tags, priority=priority)
+        self._post(title, message, tags=[tag, "chart_with_downwards_trend"], priority=priority)
 
     def notify_position_closed(self, ticker: str, pnl_pct: float, exit_reason: str, days_held: int) -> None:
-        emoji = "✅" if pnl_pct > 0 else "❌"
-        title = f"{emoji} {ticker} closed {pnl_pct:+.2f}%"
+        title = f"{ticker} closed {pnl_pct:+.2f}%"
         reason_label = {"target_reached": "hit target", "max_hold_exceeded": "max hold exceeded"}.get(exit_reason, exit_reason)
         message = f"{reason_label} after {days_held}d"
-        tags = ["moneybag" if pnl_pct > 0 else "x"]
+        tags = ["white_check_mark", "moneybag"] if pnl_pct > 0 else ["x"]
         self._post(title, message, tags=tags)
 
 
