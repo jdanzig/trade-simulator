@@ -271,7 +271,8 @@ class EdgarClient:
     def __init__(self, config: AppConfig, logger: logging.Logger):
         self.logger = logger
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "trade-simulator/1.0"})
+        contact = config.sec_contact_email or "contact@example.com"
+        self.session.headers.update({"User-Agent": f"trade-simulator/1.0 {contact}"})
         self._ticker_map: dict[str, str] | None = None
 
     def _load_mapping(self) -> dict[str, str]:

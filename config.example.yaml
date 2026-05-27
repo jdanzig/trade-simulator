@@ -6,6 +6,7 @@ newsapi_key: ""
 
 # Optional providers
 ntfy_topic: ""                     # ntfy.sh topic for push notifications (e.g. "my-dip-alerts")
+sec_contact_email: ""              # required by SEC fair-use policy for EDGAR requests
 stocktwits_api_key: ""
 reddit_client_id: ""
 reddit_client_secret: ""
