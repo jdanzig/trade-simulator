@@ -174,6 +174,9 @@ class TradeSimulatorApp:
             session_start=market_open,
             session_end=now,
         )
+        # Refresh P&L on open positions using already-fetched intraday prices
+        price_map = {t: m["current_price"] for t, m in intraday.items() if m.get("current_price")}
+        self.simulation.refresh_open_position_prices(price_map, now)
         todays_usage = self.db.get_today_api_usage(now.date())
         for ticker, metrics in intraday.items():
             current_price = metrics["current_price"]

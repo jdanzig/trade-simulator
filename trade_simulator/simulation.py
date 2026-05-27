@@ -26,6 +26,30 @@ class SimulationService:
             self.db.log_error("simulation", f"Failed to create position for {trigger['ticker']}", repr(exc))
             self.logger.exception("Failed to create position for %s", trigger["ticker"])
 
+    def refresh_open_position_prices(self, prices: dict[str, float], now: datetime) -> None:
+        """Update current_price and P&L for open positions using already-fetched prices.
+
+        Unlike update_positions, this does NOT check exit conditions or write
+        daily snapshots — it's meant for cheap intraday refreshes during the
+        price monitor poll.
+        """
+        for position in self.db.list_open_positions():
+            ticker = position["ticker"]
+            if ticker not in prices:
+                continue
+            current_price = prices[ticker]
+            entry_price = float(position["hypothetical_entry_price"])
+            pnl_pct = round(((current_price - entry_price) / entry_price) * 100, 2)
+            entry_timestamp = datetime.fromisoformat(position["entry_timestamp"])
+            days_held = max((now.date() - entry_timestamp.date()).days, 0)
+            self.db.update_position(
+                position["id"],
+                current_price=current_price,
+                pnl_pct=pnl_pct,
+                days_held=days_held,
+                status="open",
+            )
+
     def update_positions(self, trading_date: date) -> None:
         open_positions = self.db.list_open_positions()
         if not open_positions:
