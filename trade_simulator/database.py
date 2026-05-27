@@ -625,6 +625,45 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def eod_summary(self, today: date) -> dict[str, Any]:
+        """Aggregate the day's activity for the EOD notification."""
+        today_iso = today.isoformat()
+        with self.connect() as conn:
+            triggers_today = conn.execute(
+                "SELECT COUNT(*) AS n FROM triggers WHERE date(triggered_at) = ?",
+                (today_iso,),
+            ).fetchone()["n"]
+            opened_today = conn.execute(
+                "SELECT COUNT(*) AS n FROM hypothetical_positions WHERE date(entry_timestamp) = ?",
+                (today_iso,),
+            ).fetchone()["n"]
+            closed_today_rows = conn.execute(
+                """
+                SELECT ticker, hypothetical_pnl_pct, exit_reason
+                FROM hypothetical_positions
+                WHERE status = 'closed' AND date(updated_at) = ?
+                """,
+                (today_iso,),
+            ).fetchall()
+            all_time_row = conn.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN status = 'closed' THEN hypothetical_pnl_pct ELSE 0 END) AS total_closed_pnl,
+                    COUNT(CASE WHEN status = 'closed' THEN 1 END) AS total_closed_count
+                FROM hypothetical_positions
+                """
+            ).fetchone()
+        closed_today = [dict(r) for r in closed_today_rows]
+        return {
+            "open_positions": self.list_open_positions(),
+            "triggers_today": int(triggers_today),
+            "opened_today": int(opened_today),
+            "closed_today": closed_today,
+            "pnl_today_sum": round(sum(float(r["hypothetical_pnl_pct"]) for r in closed_today), 2),
+            "pnl_all_time_sum": round(float(all_time_row["total_closed_pnl"] or 0), 2),
+            "total_closed": int(all_time_row["total_closed_count"] or 0),
+        }
+
     def portfolio_summary(self) -> dict[str, Any]:
         with self.connect() as conn:
             row = conn.execute(

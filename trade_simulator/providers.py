@@ -503,6 +503,37 @@ class NtfyClient:
         priority = "high" if recommendation == "buy_candidate" and confidence == "high" else "default"
         self._post(title, message, tags=[tag, "chart_with_downwards_trend"], priority=priority)
 
+    def notify_eod_summary(self, today: str, summary: dict) -> None:
+        open_positions = summary.get("open_positions", [])
+        closed_today = summary.get("closed_today", [])
+        lines = [
+            f"Triggers: {summary.get('triggers_today', 0)}  |  "
+            f"Opened: {summary.get('opened_today', 0)}  |  Closed: {len(closed_today)}",
+            "",
+            f"P&L today: {summary.get('pnl_today_sum', 0):+.2f}%",
+            f"P&L all-time: {summary.get('pnl_all_time_sum', 0):+.2f}% ({summary.get('total_closed', 0)} closed)",
+        ]
+        if closed_today:
+            lines.append("")
+            lines.append("Closed today:")
+            for p in closed_today:
+                lines.append(f"  {p['ticker']}: {float(p['hypothetical_pnl_pct']):+.2f}% ({p.get('exit_reason') or 'n/a'})")
+        if open_positions:
+            lines.append("")
+            lines.append(f"Holdings ({len(open_positions)}):")
+            for p in open_positions:
+                lines.append(f"  {p['ticker']}: {float(p['hypothetical_pnl_pct']):+.2f}% ({int(p['days_held'])}d)")
+        else:
+            lines.append("")
+            lines.append("No open positions.")
+        pnl = summary.get("pnl_today_sum", 0)
+        tag = "chart_with_upwards_trend" if pnl > 0 else "chart_with_downwards_trend" if pnl < 0 else "bar_chart"
+        self._post(
+            title=f"EOD Summary — {today}",
+            message="\n".join(lines),
+            tags=[tag],
+        )
+
     def notify_position_closed(self, ticker: str, pnl_pct: float, exit_reason: str, days_held: int) -> None:
         title = f"{ticker} closed {pnl_pct:+.2f}%"
         reason_label = {"target_reached": "hit target", "max_hold_exceeded": "max hold exceeded"}.get(exit_reason, exit_reason)

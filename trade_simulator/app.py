@@ -280,6 +280,7 @@ class TradeSimulatorApp:
         if not self.clock.is_trading_day(today):
             return
         self.simulation.update_positions(today)
+        self.ntfy.notify_eod_summary(today.isoformat(), self.db.eod_summary(today))
         self.logger.info("EOD position update complete for %s", today)
 
 
