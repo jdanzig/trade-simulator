@@ -102,6 +102,12 @@ class TradeSimulatorApp:
             "Trade simulator started. Dashboard available at http://127.0.0.1:%s",
             self.config.dashboard_port,
         )
+        self.ntfy.notify_startup(
+            universe=self.config.universe,
+            ticker_count=len(self.db.list_universe(self.config.universe)),
+            open_positions=len(self.db.list_open_positions()),
+            dashboard_port=self.config.dashboard_port,
+        )
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
         self.shutdown_event.wait()
