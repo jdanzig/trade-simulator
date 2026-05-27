@@ -527,6 +527,12 @@ class NtfyClient:
         else:
             lines.append("")
             lines.append("No open positions.")
+        pending = summary.get("pending_positions", [])
+        if pending:
+            lines.append("")
+            lines.append(f"Pending fill at next open ({len(pending)}):")
+            for p in pending:
+                lines.append(f"  {p['ticker']}")
         return lines
 
     def notify_startup(self, universe: str, ticker_count: int, dashboard_port: int, summary: dict) -> None:

@@ -699,6 +699,7 @@ class Database:
         closed_today = [dict(r) for r in closed_today_rows]
         return {
             "open_positions": self.list_open_positions(),
+            "pending_positions": self.list_pending_positions(),
             "triggers_today": int(triggers_today),
             "opened_today": int(opened_today),
             "closed_today": closed_today,
