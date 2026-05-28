@@ -66,8 +66,16 @@ class NewsFetcher:
             "smart_money_signal": smart_money_signal,
         }
 
-    @staticmethod
-    def format_for_classifier(payload: dict[str, Any]) -> str:
+    # Caps tuned to keep input context lean. News sources are highly
+    # redundant — the same story shows up across NewsAPI, Reddit, etc. —
+    # so capping totals + truncating bodies removes duplication, not signal.
+    TIER1_MAX_ITEMS = 8
+    TIER2_MAX_ITEMS = 6
+    TIER1_TEXT_CHARS = 200
+    TIER2_TEXT_CHARS = 200
+
+    @classmethod
+    def format_for_classifier(cls, payload: dict[str, Any]) -> str:
         lines = [
             f"Ticker: {payload['ticker']}",
             f"Triggered at: {payload['triggered_at']}",
@@ -77,20 +85,21 @@ class NewsFetcher:
             "",
             "Tier 1 news and filings:",
         ]
-        for item in payload["tier1"]:
+        for item in payload["tier1"][: cls.TIER1_MAX_ITEMS]:
+            text = f"{item.get('title', '')} {item.get('description', '')}".strip()
             lines.append(
                 f"- [{item.get('source', 'unknown')}] {item.get('published_at', '')}: "
-                f"{item.get('title', '')} {item.get('description', '')}".strip()
+                f"{text[: cls.TIER1_TEXT_CHARS]}".strip()
             )
         if not payload["tier1"]:
             lines.append("- None")
         lines.append("")
         lines.append("Tier 2 sentiment:")
-        for item in payload["tier2"]:
+        for item in payload["tier2"][: cls.TIER2_MAX_ITEMS]:
             text = item.get("title") or item.get("body") or ""
             lines.append(
                 f"- [{item.get('source', 'unknown')}] {item.get('published_at', '')}: "
-                f"{text[:400]}".strip()
+                f"{text[: cls.TIER2_TEXT_CHARS]}".strip()
             )
         if not payload["tier2"]:
             lines.append("- None")
