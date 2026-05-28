@@ -215,8 +215,21 @@ class TradeSimulatorApp:
                 continue
             self.db.increment_today_api_usage(now.date(), 2)
             todays_usage += 2
-            self._run_first_pass(trigger_id)
-            self._schedule_second_pass(trigger_id, recheck_time)
+            first_pass = self._run_first_pass(trigger_id)
+            # Early exit: if pass 1 says "avoid" with high confidence, the
+            # answer is already decisive — skip pass 2 to save a Claude call.
+            if (
+                first_pass
+                and first_pass.get("recommendation") == "avoid"
+                and first_pass.get("confidence") == "high"
+            ):
+                self.db.increment_today_api_usage(now.date(), -1)  # refund pass 2
+                todays_usage -= 1
+                self.logger.info(
+                    "Skipping pass 2 for %s — pass 1 returned high-confidence avoid", ticker
+                )
+            else:
+                self._schedule_second_pass(trigger_id, recheck_time)
         self.db.set_state("last_successful_monitor_run", now.isoformat())
 
     def _process_pending_positions(self, prices: dict[str, float], now) -> None:
@@ -263,10 +276,10 @@ class TradeSimulatorApp:
                     summary=third_pass.get("cause_summary", ""),
                 )
 
-    def _run_first_pass(self, trigger_id: str) -> None:
+    def _run_first_pass(self, trigger_id: str) -> dict | None:
         trigger = self.db.get_trigger(trigger_id)
         if not trigger:
-            return
+            return None
         news_payload = self.news_fetcher.gather(trigger["ticker"], trigger["triggered_at"])
         formatted_context = self.news_fetcher.format_for_classifier(news_payload)
         try:
@@ -278,9 +291,11 @@ class TradeSimulatorApp:
                 formatted_context=formatted_context,
             )
             self.db.save_classification(trigger_id, classification)
+            return classification
         except ClassificationError as exc:
             self.db.log_error("classifier", "classification_failed", repr(exc))
             self.logger.exception("Pass 1 classification failed for %s", trigger["ticker"])
+            return None
 
     def _schedule_second_pass(self, trigger_id: str, run_at: datetime) -> None:
         self.scheduler.add_job(

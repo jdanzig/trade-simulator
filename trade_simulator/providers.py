@@ -448,12 +448,21 @@ class AnthropicClassifierClient:
         _raise_for_status(response)
 
     def classify(self, *, system_prompt: str, user_prompt: str) -> str:
+        # Mark the system prompt as cacheable — it's identical across every
+        # classification call so we pay the full input cost only on the first
+        # request in each 5-minute cache window, then ~10% of that for hits.
         response = with_retry(
             lambda: self.client.messages.create(
                 model=self.model,
                 max_tokens=1200,
                 temperature=0,
-                system=system_prompt,
+                system=[
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 messages=[{"role": "user", "content": user_prompt}],
             ),
             component="anthropic_classification",
