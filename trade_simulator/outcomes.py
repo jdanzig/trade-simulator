@@ -93,3 +93,112 @@ class OutcomeService:
             computed_at=now,
         )
         return True
+
+
+class TriggerOutcomeService:
+    """Computes the counterfactual outcome of every trigger by running it
+    through the strategy's actual exit rules on realized prices — no
+    hindsight. This labels false negatives (passed triggers that would have
+    hit target) and true negatives, completing the classifier scorecard the
+    live position tracker can't see.
+
+    Entry is anchored at recheck_scheduled_at (the moment a real buy would
+    fill at the second pass) and the +target / max-hold-days exit is
+    evaluated on daily CLOSES, mirroring the once-daily eod_update_job —
+    not intraday highs, which would overstate capturable gains.
+    """
+
+    def __init__(
+        self,
+        db: Database,
+        market_data_client,
+        logger: logging.Logger,
+        *,
+        target_return_pct: float,
+        max_hold_days: int,
+    ):
+        self.db = db
+        self.market_data_client = market_data_client
+        self.logger = logger
+        self.target_return_pct = target_return_pct
+        self.max_hold_days = max_hold_days
+
+    def compute_outcomes(self, now: datetime) -> int:
+        """Finalize outcomes for any trigger whose verdict is now knowable.
+
+        A winner is finalized as soon as a daily close crosses target; a
+        non-winner only once the full max-hold window has elapsed. Triggers
+        that are neither yet are left for a future run.
+        """
+        finalized = 0
+        for trigger in self.db.list_triggers_needing_trigger_outcome():
+            try:
+                if self._compute_single(trigger, now):
+                    finalized += 1
+            except Exception as exc:  # noqa: BLE001
+                self.db.log_error(
+                    "trigger_outcomes", f"compute failed for {trigger.get('ticker')}", repr(exc)
+                )
+                self.logger.exception("Trigger outcome compute failed for %s", trigger.get("ticker"))
+        return finalized
+
+    def _compute_single(self, trigger: dict[str, Any], now: datetime) -> bool:
+        entry_time = trigger.get("recheck_scheduled_at") or trigger.get("triggered_at")
+        if entry_time is None:
+            return False
+        if entry_time.tzinfo is None:
+            entry_time = entry_time.replace(tzinfo=EASTERN)
+        if entry_time >= now:
+            return False  # entry hasn't happened yet
+        ticker = trigger["ticker"]
+        window_end = entry_time + timedelta(days=self.max_hold_days)
+        entry_price = self.market_data_client.fetch_price_at(ticker, entry_time)
+        if not entry_price:
+            return False  # no price at entry yet; retry later
+        closes = self.market_data_client.fetch_daily_closes(ticker, entry_time, min(now, window_end))
+        if not closes:
+            return False
+        target_price = entry_price * (1 + self.target_return_pct / 100)
+        max_close = max(price for _, price in closes)
+        max_close_return = round(((max_close - entry_price) / entry_price) * 100, 4)
+
+        # First daily close at or above target → the strategy would have sold.
+        for ts, price in closes:
+            if price >= target_price:
+                self._finalize(
+                    trigger["id"], entry_time, entry_price, ts, price,
+                    hit_target=True, exit_reason="target_reached",
+                    max_close_return=max_close_return, now=now,
+                )
+                return True
+
+        # No target hit. Only finalize once the full window has closed.
+        if now >= window_end:
+            exit_ts, exit_price = closes[-1]
+            ret = round(((exit_price - entry_price) / entry_price) * 100, 4)
+            self._finalize(
+                trigger["id"], entry_time, entry_price, exit_ts, exit_price,
+                hit_target=False, exit_reason="max_hold_exceeded",
+                max_close_return=max_close_return, now=now, return_pct=ret,
+            )
+            return True
+        return False  # still open, no verdict yet
+
+    def _finalize(
+        self, trigger_id, entry_time, entry_price, exit_time, exit_price,
+        *, hit_target, exit_reason, max_close_return, now, return_pct=None,
+    ) -> None:
+        if return_pct is None:
+            return_pct = round(((exit_price - entry_price) / entry_price) * 100, 4)
+        self.db.insert_trigger_outcome(
+            trigger_id=trigger_id,
+            entry_time=entry_time,
+            entry_price=entry_price,
+            exit_time=exit_time,
+            exit_price=exit_price,
+            return_pct=return_pct,
+            hit_target=hit_target,
+            exit_reason=exit_reason,
+            max_close_return_pct=max_close_return,
+            computed_at=now,
+        )

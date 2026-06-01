@@ -194,6 +194,38 @@ class AlpacaDataClient:
             return None
         return float(bars[0]["c"])
 
+    def fetch_daily_closes(
+        self, ticker: str, start: datetime, end: datetime
+    ) -> list[tuple[datetime, float]]:
+        """Daily (timestamp, close) bars for one ticker over [start, end],
+        ascending. Used to walk a counterfactual position forward through
+        the strategy's daily-close exit rules.
+        """
+        response = with_retry(
+            lambda: self.session.get(
+                f"{self.base_url}/{ticker}/bars",
+                params={
+                    "timeframe": "1Day",
+                    "start": start.astimezone(EASTERN).isoformat(),
+                    "end": end.astimezone(EASTERN).isoformat(),
+                    "adjustment": "all",
+                    "feed": "iex",
+                    "limit": 10000,
+                    "sort": "asc",
+                },
+                timeout=60,
+            ),
+            component="alpaca_daily_closes",
+            logger=self.logger,
+        )
+        _raise_for_status(response)
+        bars = response.json().get("bars", [])
+        closes: list[tuple[datetime, float]] = []
+        for bar in bars:
+            ts = datetime.fromisoformat(bar["t"].replace("Z", "+00:00")).astimezone(EASTERN)
+            closes.append((ts, float(bar["c"])))
+        return closes
+
     def fetch_eod_prices(self, tickers: list[str], trading_date: date) -> dict[str, float]:
         start = datetime.combine(trading_date - timedelta(days=5), datetime.min.time(), tzinfo=EASTERN)
         end = datetime.combine(trading_date + timedelta(days=1), datetime.min.time(), tzinfo=EASTERN)
@@ -586,6 +618,15 @@ class NtfyClient:
             lines.append(
                 f"Corpus: {corpus.get('news_events', 0)} events, "
                 f"{corpus.get('labeled_events', 0)} labeled"
+            )
+        sc = summary.get("scorecard")
+        if sc and sc.get("total"):
+            lines.append("")
+            lines.append(
+                f"Classifier ({sc['total']} scored): "
+                f"missed {sc['false_negatives']} winners, "
+                f"caught {sc['true_positives']}, "
+                f"bad buys {sc['false_positives']}"
             )
         return lines
 

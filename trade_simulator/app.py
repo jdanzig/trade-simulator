@@ -17,7 +17,7 @@ from .config import AppPaths, ConfigError, load_config
 from .dashboard import DashboardServer
 from .database import Database, TriggerCandidate
 from .embedding import EmbeddingProvider
-from .outcomes import OutcomeService
+from .outcomes import OutcomeService, TriggerOutcomeService
 from .market import EASTERN, MarketClock
 from .news import NewsFetcher
 from .providers import (
@@ -87,6 +87,13 @@ class TradeSimulatorApp:
         )
         self.simulation = SimulationService(self.config, self.db, self.market_data, self.logger, ntfy=self.ntfy)
         self.outcomes = OutcomeService(self.db, self.market_data, self.logger)
+        self.trigger_outcomes = TriggerOutcomeService(
+            self.db,
+            self.market_data,
+            self.logger,
+            target_return_pct=self.config.target_return_pct,
+            max_hold_days=self.config.max_hold_days,
+        )
         self.dashboard = DashboardServer(self.db, self.config.dashboard_port)
 
     def validate_startup(self) -> None:
@@ -361,10 +368,14 @@ class TradeSimulatorApp:
             self.logger.info("Computed %s news outcomes", n)
 
     def eod_update_job(self) -> None:
-        today = self.clock.now().date()
+        now = self.clock.now()
+        today = now.date()
         if not self.clock.is_trading_day(today):
             return
         self.simulation.update_positions(today)
+        n = self.trigger_outcomes.compute_outcomes(now)
+        if n:
+            self.logger.info("Finalized %s trigger outcomes", n)
         self.ntfy.notify_eod_summary(today.isoformat(), self.db.eod_summary(today))
         self.logger.info("EOD position update complete for %s", today)
 

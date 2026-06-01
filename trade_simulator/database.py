@@ -202,6 +202,20 @@ class Database:
                     ON news_outcomes(news_event_id);
                 CREATE INDEX IF NOT EXISTS idx_news_outcomes_future_time
                     ON news_outcomes(future_time);
+
+                CREATE TABLE IF NOT EXISTS trigger_outcomes (
+                    trigger_id TEXT PRIMARY KEY,
+                    entry_time TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_time TEXT NOT NULL,
+                    exit_price REAL NOT NULL,
+                    return_pct REAL NOT NULL,
+                    hit_target INTEGER NOT NULL,
+                    exit_reason TEXT NOT NULL,
+                    max_close_return_pct REAL NOT NULL,
+                    computed_at TEXT NOT NULL,
+                    FOREIGN KEY (trigger_id) REFERENCES triggers(id) ON DELETE CASCADE
+                );
                 """
             )
             # vec0 is a virtual table — created separately so the dim from
@@ -931,6 +945,120 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_triggers_needing_trigger_outcome(self) -> list[dict[str, Any]]:
+        """Triggers with no finalized counterfactual outcome yet.
+
+        Returns the trigger plus its final-pass recommendation (highest
+        pass_number), so the compute step can run every trigger through the
+        strategy's exit rules regardless of whether we actually bought it.
+        Unmatured triggers stay in this set and are re-attempted daily until
+        they either hit target or their max-hold window closes.
+        """
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT t.id, t.ticker, t.triggered_at, t.trigger_price,
+                       t.recheck_scheduled_at,
+                       (
+                         SELECT c.recommendation FROM classifications c
+                         WHERE c.trigger_id = t.id
+                         ORDER BY c.pass_number DESC LIMIT 1
+                       ) AS final_recommendation
+                FROM triggers t
+                LEFT JOIN trigger_outcomes o ON o.trigger_id = t.id
+                WHERE o.trigger_id IS NULL
+                ORDER BY t.triggered_at
+                """
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["triggered_at"] = _parse_iso(payload["triggered_at"])
+            payload["recheck_scheduled_at"] = _parse_iso(payload["recheck_scheduled_at"])
+            results.append(payload)
+        return results
+
+    def insert_trigger_outcome(
+        self,
+        *,
+        trigger_id: str,
+        entry_time: datetime,
+        entry_price: float,
+        exit_time: datetime,
+        exit_price: float,
+        return_pct: float,
+        hit_target: bool,
+        exit_reason: str,
+        max_close_return_pct: float,
+        computed_at: datetime,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO trigger_outcomes (
+                    trigger_id, entry_time, entry_price, exit_time, exit_price,
+                    return_pct, hit_target, exit_reason, max_close_return_pct, computed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trigger_id) DO NOTHING
+                """,
+                (
+                    trigger_id,
+                    _as_eastern_iso(entry_time),
+                    entry_price,
+                    _as_eastern_iso(exit_time),
+                    exit_price,
+                    return_pct,
+                    1 if hit_target else 0,
+                    exit_reason,
+                    max_close_return_pct,
+                    _as_eastern_iso(computed_at),
+                ),
+            )
+
+    def classifier_scorecard(self) -> dict[str, Any]:
+        """Confusion matrix of decision (bought vs passed) against the
+        counterfactual outcome (would have hit target vs not).
+
+        'Bought' = final-pass recommendation was buy_candidate. The outcome
+        is the same for every trigger — the strategy's mechanical exit rules
+        applied to realized prices — so passed triggers that hit_target are
+        false negatives (missed winners) and bought ones that didn't are
+        false positives.
+        """
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    CASE WHEN (
+                        SELECT c.recommendation FROM classifications c
+                        WHERE c.trigger_id = o.trigger_id
+                        ORDER BY c.pass_number DESC LIMIT 1
+                    ) = 'buy_candidate' THEN 1 ELSE 0 END AS bought,
+                    o.hit_target
+                FROM trigger_outcomes o
+                """
+            ).fetchall()
+        tp = fp = fn = tn = 0
+        for r in rows:
+            bought, hit = int(r["bought"]), int(r["hit_target"])
+            if bought and hit:
+                tp += 1
+            elif bought and not hit:
+                fp += 1
+            elif not bought and hit:
+                fn += 1
+            else:
+                tn += 1
+        total = tp + fp + fn + tn
+        return {
+            "true_positives": tp,
+            "false_positives": fp,
+            "false_negatives": fn,
+            "true_negatives": tn,
+            "total": total,
+        }
+
     def corpus_stats(self) -> dict[str, int]:
         """Retrieval corpus health: total persisted news events and how many
         have at least one matured outcome (i.e. are usable as neighbors)."""
@@ -980,6 +1108,7 @@ class Database:
             "pnl_all_time_sum": round(float(all_time_row["total_closed_pnl"] or 0), 2),
             "total_closed": int(all_time_row["total_closed_count"] or 0),
             "corpus": self.corpus_stats(),
+            "scorecard": self.classifier_scorecard(),
         }
 
     def portfolio_summary(self) -> dict[str, Any]:
