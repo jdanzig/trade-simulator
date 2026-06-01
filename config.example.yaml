@@ -17,7 +17,7 @@ embedding_model: "BAAI/bge-small-en-v1.5"  # sentence-transformers model id; 384
 outcome_windows: ["1h", "1d"]              # realized return windows for news events; suffix s/m/h/d
 universe: "both"                   # sp500 | nasdaq100 | both
 blocklist: []                      # tickers to never trigger on
-drop_threshold_pct: 7              # % drop from intraday high to trigger
+drop_threshold_pct: 5              # % drop from intraday high to trigger
 trigger_cooldown_hours: 4          # per-ticker cooldown after trigger
 poll_interval_minutes: 5           # how often price monitor runs
 max_hold_days: 30                  # auto-close hypothetical positions after N days

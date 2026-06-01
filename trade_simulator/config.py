@@ -47,7 +47,7 @@ class AppConfig:
     outcome_windows: list[str] = field(default_factory=lambda: ["1h", "1d"])
     universe: str = "sp500"
     blocklist: list[str] = field(default_factory=list)
-    drop_threshold_pct: float = 7.0
+    drop_threshold_pct: float = 5.0
     trigger_cooldown_hours: int = 4
     poll_interval_minutes: int = 5
     max_hold_days: int = 30
