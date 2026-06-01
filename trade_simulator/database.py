@@ -181,6 +181,26 @@ class Database:
                     ON news_events(ticker);
                 CREATE INDEX IF NOT EXISTS idx_news_events_trigger
                     ON news_events(trigger_id);
+
+                CREATE TABLE IF NOT EXISTS news_outcomes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    news_event_id INTEGER NOT NULL,
+                    window_label TEXT NOT NULL,
+                    window_seconds INTEGER NOT NULL,
+                    anchor_time TEXT NOT NULL,
+                    anchor_price REAL NOT NULL,
+                    future_time TEXT NOT NULL,
+                    future_price REAL NOT NULL,
+                    return_pct REAL NOT NULL,
+                    computed_at TEXT NOT NULL,
+                    UNIQUE(news_event_id, window_label),
+                    FOREIGN KEY (news_event_id) REFERENCES news_events(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_news_outcomes_event
+                    ON news_outcomes(news_event_id);
+                CREATE INDEX IF NOT EXISTS idx_news_outcomes_future_time
+                    ON news_outcomes(future_time);
                 """
             )
             # vec0 is a virtual table — created separately so the dim from
@@ -499,6 +519,68 @@ class Database:
                 (nid, serialize_vector(embedding)),
             )
             return nid
+
+    def list_news_events_needing_outcome(
+        self, window_label: str, window_seconds: int, now: datetime
+    ) -> list[dict[str, Any]]:
+        """Events whose (event_time + window) is in the past but have no outcome row yet.
+
+        Uses published_at when available, fetched_at as fallback. The
+        outcome's future_time must be <= now, meaning the window has fully
+        closed and the realized return can be computed.
+        """
+        now_iso = _as_eastern_iso(now)
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT ne.id, ne.ticker, ne.published_at, ne.fetched_at, ne.title, ne.body
+                FROM news_events ne
+                LEFT JOIN news_outcomes nout
+                  ON nout.news_event_id = ne.id AND nout.window_label = ?
+                WHERE nout.id IS NULL
+                  AND datetime(COALESCE(ne.published_at, ne.fetched_at), '+' || ? || ' seconds') <= datetime(?)
+                ORDER BY ne.id
+                """,
+                (window_label, window_seconds, now_iso),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def insert_news_outcome(
+        self,
+        *,
+        news_event_id: int,
+        window_label: str,
+        window_seconds: int,
+        anchor_time: datetime,
+        anchor_price: float,
+        future_time: datetime,
+        future_price: float,
+        return_pct: float,
+        computed_at: datetime,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO news_outcomes (
+                    news_event_id, window_label, window_seconds,
+                    anchor_time, anchor_price, future_time, future_price,
+                    return_pct, computed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(news_event_id, window_label) DO NOTHING
+                """,
+                (
+                    news_event_id,
+                    window_label,
+                    window_seconds,
+                    _as_eastern_iso(anchor_time),
+                    anchor_price,
+                    _as_eastern_iso(future_time),
+                    future_price,
+                    return_pct,
+                    _as_eastern_iso(computed_at),
+                ),
+            )
 
     def list_news_events_without_embedding(self) -> list[dict[str, Any]]:
         """For re-embedding when the model changes."""

@@ -17,6 +17,7 @@ from .config import AppPaths, ConfigError, load_config
 from .dashboard import DashboardServer
 from .database import Database, TriggerCandidate
 from .embedding import EmbeddingProvider
+from .outcomes import OutcomeService
 from .market import EASTERN, MarketClock
 from .news import NewsFetcher
 from .providers import (
@@ -85,6 +86,7 @@ class TradeSimulatorApp:
             self.logger,
         )
         self.simulation = SimulationService(self.config, self.db, self.market_data, self.logger, ntfy=self.ntfy)
+        self.outcomes = OutcomeService(self.db, self.market_data, self.logger)
         self.dashboard = DashboardServer(self.db, self.config.dashboard_port)
 
     def validate_startup(self) -> None:
@@ -139,6 +141,15 @@ class TradeSimulatorApp:
             CronTrigger(day_of_week="sun", hour=17, minute=0, timezone=EASTERN.key),
             kwargs={"component": "refresh_universe", "fn": self.refresh_universe},
             id="refresh_universe",
+            replace_existing=True,
+        )
+        # Run hourly to compute realized outcomes for any news_events whose
+        # window has just closed. Cheap if the queue is empty.
+        self.scheduler.add_job(
+            self._safe_run,
+            IntervalTrigger(hours=1, timezone=EASTERN.key),
+            kwargs={"component": "compute_outcomes", "fn": self.compute_outcomes_job},
+            id="compute_outcomes",
             replace_existing=True,
         )
 
@@ -342,6 +353,12 @@ class TradeSimulatorApp:
             confidence=finalized.get("confidence", ""),
             summary=finalized.get("cause_summary", ""),
         )
+
+    def compute_outcomes_job(self) -> None:
+        now = self.clock.now()
+        n = self.outcomes.compute_outcomes(self.config.outcome_windows, now)
+        if n:
+            self.logger.info("Computed %s news outcomes", n)
 
     def eod_update_job(self) -> None:
         today = self.clock.now().date()

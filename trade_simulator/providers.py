@@ -156,6 +156,44 @@ class AlpacaDataClient:
             raise RuntimeError(f"No latest price returned for {ticker}")
         return float(payload[ticker]["c"])
 
+    def fetch_price_at(
+        self,
+        ticker: str,
+        target_time: datetime,
+        *,
+        search_hours: int = 96,
+    ) -> float | None:
+        """Return the first trade close price at or after target_time.
+
+        If target_time falls outside market hours (overnight, weekend,
+        holiday), this rolls forward to the next available bar. Returns
+        None if no bar can be found within search_hours.
+        """
+        start = target_time.astimezone(EASTERN)
+        end = start + timedelta(hours=search_hours)
+        response = with_retry(
+            lambda: self.session.get(
+                f"{self.base_url}/{ticker}/bars",
+                params={
+                    "timeframe": "1Min",
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "adjustment": "all",
+                    "feed": "iex",
+                    "limit": 1,
+                    "sort": "asc",
+                },
+                timeout=30,
+            ),
+            component="alpaca_price_at",
+            logger=self.logger,
+        )
+        _raise_for_status(response)
+        bars = response.json().get("bars", [])
+        if not bars:
+            return None
+        return float(bars[0]["c"])
+
     def fetch_eod_prices(self, tickers: list[str], trading_date: date) -> dict[str, float]:
         start = datetime.combine(trading_date - timedelta(days=5), datetime.min.time(), tzinfo=EASTERN)
         end = datetime.combine(trading_date + timedelta(days=1), datetime.min.time(), tzinfo=EASTERN)

@@ -44,6 +44,7 @@ class AppConfig:
     reddit_client_secret: str = ""
     anthropic_model: str = "claude-haiku-4-5-20251001"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
+    outcome_windows: list[str] = field(default_factory=lambda: ["1h", "1d"])
     universe: str = "sp500"
     blocklist: list[str] = field(default_factory=list)
     drop_threshold_pct: float = 7.0
