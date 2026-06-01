@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from .config import AppConfig
 from .database import Database
 from .embedding import EmbeddingProvider
+from .market import EASTERN
 from .providers import (
     EdgarClient,
     GoogleNewsClient,
@@ -19,6 +21,36 @@ from .providers import (
 # Cap body text fed to the embedder. Long bodies dilute the title signal
 # and slow encoding; first 500 chars usually captures the lede.
 EMBED_BODY_CHARS = 500
+
+
+def normalize_published_at(raw: str | None) -> str | None:
+    """Normalize a source's published_at into canonical Eastern-ISO.
+
+    News sources emit heterogeneous formats: NewsAPI/StockTwits use ISO-8601
+    with a trailing Z, Google News RSS uses RFC822 ("Mon, 27 May 2026
+    10:45:00 GMT"), SEC uses a bare date, Reddit is already Eastern-ISO.
+    Outcome labeling and the retrieval leakage rule both need a single
+    parseable format, so we canonicalize once at ingestion. Returns None if
+    the value is empty or unparseable (the event is still stored; it just
+    falls back to fetched_at downstream).
+    """
+    if not raw or not raw.strip():
+        return None
+    text = raw.strip()
+    iso_candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
+    dt: datetime | None = None
+    try:
+        dt = datetime.fromisoformat(iso_candidate)
+    except ValueError:
+        try:
+            dt = parsedate_to_datetime(text)
+        except (ValueError, TypeError):
+            return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=EASTERN)
+    return dt.astimezone(EASTERN).isoformat()
 
 
 class NewsFetcher:
@@ -127,7 +159,7 @@ class NewsFetcher:
                     ticker=ticker,
                     source=item.get("source", "unknown"),
                     tier=tier,
-                    published_at=item.get("published_at") or None,
+                    published_at=normalize_published_at(item.get("published_at")),
                     fetched_at=triggered_at,
                     title=title,
                     body=body,
