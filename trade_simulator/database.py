@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -581,6 +582,84 @@ class Database:
                     _as_eastern_iso(computed_at),
                 ),
             )
+
+    def knn_news_neighbors(
+        self,
+        *,
+        query_embedding: list[float],
+        query_timestamp: datetime,
+        overfetch: int,
+        exclude_trigger_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """KNN over news_event_vec, returning leakage-valid neighbors with
+        their already-matured outcomes attached.
+
+        Leakage rules (both enforced as-of query_timestamp so this is safe
+        to call from a backtest):
+          1. fetched_at < query_timestamp  (we had ingested the event)
+          2. only outcomes whose future_time <= query_timestamp are attached
+             (the window had closed, so the return was knowable)
+          3. an event with zero matured outcomes is dropped entirely
+
+        fetched_at is used for (1) rather than published_at because it's
+        written in a single canonical format; published_at arrives in
+        heterogeneous per-source formats that don't string-compare safely.
+        """
+        qiso = _as_eastern_iso(query_timestamp)
+        blob = serialize_vector(query_embedding)
+        with self.connect() as conn:
+            candidates = conn.execute(
+                """
+                SELECT rowid, distance
+                FROM news_event_vec
+                WHERE embedding MATCH ?
+                ORDER BY distance
+                LIMIT ?
+                """,
+                (blob, overfetch),
+            ).fetchall()
+            if not candidates:
+                return []
+            distance_by_id = {row["rowid"]: row["distance"] for row in candidates}
+            rowids = list(distance_by_id.keys())
+            ph = ",".join("?" for _ in rowids)
+            event_sql = f"""
+                SELECT id, trigger_id, ticker, source, tier, published_at, fetched_at, title, body
+                FROM news_events
+                WHERE id IN ({ph})
+                  AND fetched_at < ?
+            """
+            params: list[Any] = [*rowids, qiso]
+            if exclude_trigger_id is not None:
+                event_sql += " AND trigger_id != ?"
+                params.append(exclude_trigger_id)
+            events = [dict(r) for r in conn.execute(event_sql, params).fetchall()]
+            if not events:
+                return []
+            event_ids = [e["id"] for e in events]
+            ph2 = ",".join("?" for _ in event_ids)
+            outcome_rows = conn.execute(
+                f"""
+                SELECT news_event_id, window_label, window_seconds, return_pct,
+                       anchor_price, future_price, future_time
+                FROM news_outcomes
+                WHERE news_event_id IN ({ph2})
+                  AND future_time <= ?
+                """,
+                (*event_ids, qiso),
+            ).fetchall()
+        outcomes_by_event: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for row in outcome_rows:
+            outcomes_by_event[row["news_event_id"]].append(dict(row))
+        results: list[dict[str, Any]] = []
+        for event in events:
+            mature = outcomes_by_event.get(event["id"])
+            if not mature:
+                continue
+            event["distance"] = distance_by_id[event["id"]]
+            event["outcomes"] = mature
+            results.append(event)
+        return results
 
     def list_news_events_without_embedding(self) -> list[dict[str, Any]]:
         """For re-embedding when the model changes."""
