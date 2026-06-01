@@ -16,6 +16,7 @@ from .classifier import ClassificationError, ClassifierService
 from .config import AppPaths, ConfigError, load_config
 from .dashboard import DashboardServer
 from .database import Database, TriggerCandidate
+from .embedding import EmbeddingProvider
 from .market import EASTERN, MarketClock
 from .news import NewsFetcher
 from .providers import (
@@ -75,7 +76,8 @@ class TradeSimulatorApp:
         self.newsapi = NewsApiClient(self.config, self.logger)
         self.anthropic_client = AnthropicClassifierClient(self.config, self.logger)
         self.ntfy = NtfyClient(self.config.ntfy_topic, self.logger)
-        self.news_fetcher = NewsFetcher(self.config, self.db, self.logger)
+        self.embedding_provider = EmbeddingProvider(self.config.embedding_model, self.logger)
+        self.news_fetcher = NewsFetcher(self.config, self.db, self.logger, self.embedding_provider)
         self.classifier = ClassifierService(
             self.config,
             self.paths.classifier_prompt_path,
@@ -250,7 +252,7 @@ class TradeSimulatorApp:
             if not trigger:
                 self.db.cancel_pending_position(position["id"], "trigger_missing")
                 continue
-            news_payload = self.news_fetcher.gather(ticker, trigger["triggered_at"])
+            news_payload = self.news_fetcher.gather(ticker, trigger["triggered_at"], trigger_id=trigger["id"])
             formatted_context = self.news_fetcher.format_for_classifier(news_payload)
             try:
                 third_pass = self.classifier.classify(
@@ -280,7 +282,7 @@ class TradeSimulatorApp:
         trigger = self.db.get_trigger(trigger_id)
         if not trigger:
             return None
-        news_payload = self.news_fetcher.gather(trigger["ticker"], trigger["triggered_at"])
+        news_payload = self.news_fetcher.gather(trigger["ticker"], trigger["triggered_at"], trigger_id=trigger_id)
         formatted_context = self.news_fetcher.format_for_classifier(news_payload)
         try:
             classification = self.classifier.classify(
@@ -314,7 +316,7 @@ class TradeSimulatorApp:
         if not trigger:
             return
         now = self.clock.now()
-        news_payload = self.news_fetcher.gather(trigger["ticker"], trigger["triggered_at"])
+        news_payload = self.news_fetcher.gather(trigger["ticker"], trigger["triggered_at"], trigger_id=trigger_id)
         formatted_context = self.news_fetcher.format_for_classifier(news_payload)
         try:
             second_pass = self.classifier.classify(

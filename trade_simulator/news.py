@@ -6,6 +6,7 @@ from typing import Any
 
 from .config import AppConfig
 from .database import Database
+from .embedding import EmbeddingProvider
 from .providers import (
     EdgarClient,
     GoogleNewsClient,
@@ -15,19 +16,30 @@ from .providers import (
     summarize_retail_sentiment,
 )
 
+# Cap body text fed to the embedder. Long bodies dilute the title signal
+# and slow encoding; first 500 chars usually captures the lede.
+EMBED_BODY_CHARS = 500
+
 
 class NewsFetcher:
-    def __init__(self, config: AppConfig, db: Database, logger: logging.Logger):
+    def __init__(
+        self,
+        config: AppConfig,
+        db: Database,
+        logger: logging.Logger,
+        embedding_provider: EmbeddingProvider | None = None,
+    ):
         self.config = config
         self.db = db
         self.logger = logger
+        self.embedding_provider = embedding_provider
         self.google_news = GoogleNewsClient(logger)
         self.newsapi = NewsApiClient(config, logger)
         self.edgar = EdgarClient(config, logger)
         self.stocktwits = StocktwitsClient(logger)
         self.reddit = RedditClient(config, logger)
 
-    def gather(self, ticker: str, triggered_at: datetime) -> dict[str, Any]:
+    def gather(self, ticker: str, triggered_at: datetime, trigger_id: str | None = None) -> dict[str, Any]:
         tier1: list[dict[str, str]] = []
         tier2: list[dict[str, str]] = []
         sources_used: list[str] = []
@@ -56,6 +68,15 @@ class NewsFetcher:
                 None,
             )
 
+        if trigger_id and self.embedding_provider is not None:
+            self._persist_with_embeddings(
+                trigger_id=trigger_id,
+                ticker=ticker,
+                triggered_at=triggered_at,
+                tier1=tier1,
+                tier2=tier2,
+            )
+
         return {
             "ticker": ticker,
             "triggered_at": triggered_at.isoformat(),
@@ -65,6 +86,56 @@ class NewsFetcher:
             "retail_sentiment_hint": summarize_retail_sentiment(tier2),
             "smart_money_signal": smart_money_signal,
         }
+
+    @staticmethod
+    def _item_title_body(item: dict[str, str]) -> tuple[str, str]:
+        title = (item.get("title") or "").strip()
+        body = (item.get("description") or item.get("body") or "").strip()
+        return title, body
+
+    def _persist_with_embeddings(
+        self,
+        *,
+        trigger_id: str,
+        ticker: str,
+        triggered_at: datetime,
+        tier1: list[dict[str, str]],
+        tier2: list[dict[str, str]],
+    ) -> None:
+        """Insert each fetched item into news_events + its embedding.
+
+        Failures here are non-fatal — classification must continue even if
+        we can't build the corpus. Duplicates (same trigger+source+text)
+        are silently ignored by the UNIQUE constraint.
+        """
+        try:
+            items: list[tuple[dict[str, str], int]] = [(i, 1) for i in tier1] + [(i, 2) for i in tier2]
+            texts: list[str] = []
+            payloads: list[tuple[dict[str, str], int, str, str]] = []
+            for item, tier in items:
+                title, body = self._item_title_body(item)
+                if not title and not body:
+                    continue
+                texts.append(f"{title} {body[:EMBED_BODY_CHARS]}".strip())
+                payloads.append((item, tier, title, body))
+            if not payloads:
+                return
+            vectors = self.embedding_provider.embed_batch(texts)
+            for (item, tier, title, body), vec in zip(payloads, vectors, strict=True):
+                self.db.insert_news_event(
+                    trigger_id=trigger_id,
+                    ticker=ticker,
+                    source=item.get("source", "unknown"),
+                    tier=tier,
+                    published_at=item.get("published_at") or None,
+                    fetched_at=triggered_at,
+                    title=title,
+                    body=body,
+                    embedding=vec,
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.db.log_error("news_persistence", f"persist failed for {ticker}", repr(exc))
+            self.logger.exception("News persistence failed for %s", ticker)
 
     # Caps tuned to keep input context lean. News sources are highly
     # redundant — the same story shows up across NewsAPI, Reddit, etc. —

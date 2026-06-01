@@ -8,6 +8,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import sqlite_vec
+
+from .embedding import EMBEDDING_DIM, serialize_vector
 from .market import EASTERN
 from .utils import from_json, to_json
 
@@ -44,6 +47,12 @@ class Database:
     @contextmanager
     def connect(self):
         connection = sqlite3.connect(self.path, check_same_thread=False)
+        # sqlite-vec is loaded on every connection — the vec0 virtual tables
+        # are unusable without it. Some platform Pythons disable extension
+        # loading; if that's the case here we let the error surface.
+        connection.enable_load_extension(True)
+        sqlite_vec.load(connection)
+        connection.enable_load_extension(False)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
@@ -151,7 +160,34 @@ class Database:
                     error_message TEXT NOT NULL,
                     raw_exception TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS news_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trigger_id TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    tier INTEGER NOT NULL,
+                    published_at TEXT,
+                    fetched_at TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    body TEXT NOT NULL DEFAULT '',
+                    UNIQUE(trigger_id, source, title, body),
+                    FOREIGN KEY (trigger_id) REFERENCES triggers(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_news_events_published
+                    ON news_events(published_at);
+                CREATE INDEX IF NOT EXISTS idx_news_events_ticker
+                    ON news_events(ticker);
+                CREATE INDEX IF NOT EXISTS idx_news_events_trigger
+                    ON news_events(trigger_id);
                 """
+            )
+            # vec0 is a virtual table — created separately so the dim from
+            # the embedding module is the single source of truth.
+            conn.execute(
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS news_event_vec "
+                f"USING vec0(embedding float[{EMBEDDING_DIM}])"
             )
 
     def log_error(self, component: str, error_message: str, raw_exception: str | None = None) -> None:
@@ -417,6 +453,72 @@ class Database:
                 "SELECT * FROM hypothetical_positions WHERE status = 'pending' ORDER BY entry_timestamp"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def insert_news_event(
+        self,
+        *,
+        trigger_id: str,
+        ticker: str,
+        source: str,
+        tier: int,
+        published_at: str | None,
+        fetched_at: datetime,
+        title: str,
+        body: str,
+        embedding: list[float],
+    ) -> int | None:
+        """Insert a news event + its embedding atomically.
+
+        Returns the new news_events.id, or None if a duplicate was skipped.
+        """
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO news_events (
+                    trigger_id, ticker, source, tier, published_at, fetched_at, title, body
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trigger_id, source, title, body) DO NOTHING
+                """,
+                (
+                    trigger_id,
+                    ticker,
+                    source,
+                    tier,
+                    published_at,
+                    _as_eastern_iso(fetched_at),
+                    title,
+                    body,
+                ),
+            )
+            if cursor.rowcount == 0:
+                return None
+            nid = cursor.lastrowid
+            conn.execute(
+                "INSERT INTO news_event_vec (rowid, embedding) VALUES (?, ?)",
+                (nid, serialize_vector(embedding)),
+            )
+            return nid
+
+    def list_news_events_without_embedding(self) -> list[dict[str, Any]]:
+        """For re-embedding when the model changes."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT ne.id, ne.ticker, ne.title, ne.body
+                FROM news_events ne
+                LEFT JOIN news_event_vec v ON v.rowid = ne.id
+                WHERE v.rowid IS NULL
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def store_news_embedding(self, news_event_id: int, embedding: list[float]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO news_event_vec (rowid, embedding) VALUES (?, ?)",
+                (news_event_id, serialize_vector(embedding)),
+            )
 
     def cancel_pending_position(self, position_id: str, reason: str) -> None:
         with self.connect() as conn:
