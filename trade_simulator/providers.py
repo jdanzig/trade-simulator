@@ -580,6 +580,13 @@ class NtfyClient:
             lines.append(f"Pending fill at next open ({len(pending)}):")
             for p in pending:
                 lines.append(f"  {p['ticker']}")
+        corpus = summary.get("corpus")
+        if corpus:
+            lines.append("")
+            lines.append(
+                f"Corpus: {corpus.get('news_events', 0)} events, "
+                f"{corpus.get('labeled_events', 0)} labeled"
+            )
         return lines
 
     def notify_startup(self, universe: str, ticker_count: int, dashboard_port: int, summary: dict) -> None:

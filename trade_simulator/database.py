@@ -931,6 +931,16 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def corpus_stats(self) -> dict[str, int]:
+        """Retrieval corpus health: total persisted news events and how many
+        have at least one matured outcome (i.e. are usable as neighbors)."""
+        with self.connect() as conn:
+            events = conn.execute("SELECT COUNT(*) AS n FROM news_events").fetchone()["n"]
+            labeled = conn.execute(
+                "SELECT COUNT(DISTINCT news_event_id) AS n FROM news_outcomes"
+            ).fetchone()["n"]
+        return {"news_events": int(events), "labeled_events": int(labeled)}
+
     def eod_summary(self, today: date) -> dict[str, Any]:
         """Aggregate the day's activity for the EOD notification."""
         today_iso = today.isoformat()
@@ -969,6 +979,7 @@ class Database:
             "pnl_today_sum": round(sum(float(r["hypothetical_pnl_pct"]) for r in closed_today), 2),
             "pnl_all_time_sum": round(float(all_time_row["total_closed_pnl"] or 0), 2),
             "total_closed": int(all_time_row["total_closed_count"] or 0),
+            "corpus": self.corpus_stats(),
         }
 
     def portfolio_summary(self) -> dict[str, Any]:
