@@ -45,6 +45,8 @@ class AppConfig:
     anthropic_model: str = "claude-haiku-4-5-20251001"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     outcome_windows: list[str] = field(default_factory=lambda: ["1h", "1d"])
+    news_retrieval_enabled: bool = False
+    news_retrieval_k: int = 5
     universe: str = "sp500"
     blocklist: list[str] = field(default_factory=list)
     drop_threshold_pct: float = 5.0

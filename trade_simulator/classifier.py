@@ -36,11 +36,13 @@ class ClassifierService:
         prompt_path: Path,
         anthropic_client,
         logger: logging.Logger,
+        retrieval_service=None,
     ):
         self.config = config
         self.prompt_path = prompt_path
         self.anthropic_client = anthropic_client
         self.logger = logger
+        self.retrieval_service = retrieval_service
 
     def _load_prompt(self) -> str:
         prompt = self.prompt_path.read_text()
@@ -50,6 +52,45 @@ class ClassifierService:
             )
         return prompt
 
+    def _retrieval_block(
+        self,
+        trigger: dict[str, Any],
+        news_payload: dict[str, Any],
+        now: datetime | None,
+    ) -> str:
+        """Build the historical-precedent prompt section, or "" to fall back
+        to the cold path.
+
+        Returns "" (cold start) when the flag is off, retrieval isn't wired,
+        anything errors, or fewer than news_retrieval_k qualifying neighbors
+        exist. Retrieval must never break classification, so all failures
+        degrade silently to the cold prompt.
+        """
+        if not self.config.news_retrieval_enabled or self.retrieval_service is None:
+            return ""
+        from .retrieval import build_query_text, format_precedent_block
+
+        query_text = build_query_text(news_payload)
+        if not query_text:
+            return ""
+        # Decision time governs the leakage cutoff; pass 1 runs at trigger time.
+        query_timestamp = now or trigger["triggered_at"]
+        k = self.config.news_retrieval_k
+        try:
+            neighbors = self.retrieval_service.find_neighbors(
+                query_text=query_text,
+                query_timestamp=query_timestamp,
+                ticker=trigger["ticker"],
+                k=k,
+                exclude_trigger_id=trigger["id"],
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Retrieval failed for %s, using cold path: %s", trigger["ticker"], exc)
+            return ""
+        if len(neighbors) < k:
+            return ""  # cold-start fallback: not enough qualifying precedent
+        return format_precedent_block(neighbors)
+
     def classify(
         self,
         *,
@@ -58,6 +99,7 @@ class ClassifierService:
         news_maturity: str,
         news_payload: dict[str, Any],
         formatted_context: str,
+        now: datetime | None = None,
     ) -> dict[str, Any]:
         system_prompt = self._load_prompt()
         user_prompt = (
@@ -82,6 +124,14 @@ class ClassifierService:
             "recheck_scheduled_at (string or null).\n\n"
             f"Context:\n{formatted_context}"
         )
+        precedent = self._retrieval_block(trigger, news_payload, now)
+        if precedent:
+            user_prompt += (
+                "\n\nHistorical precedent (past events most similar to this one by news "
+                "similarity, with the stock's realized move afterward — retrieved analogs, "
+                "not guarantees; weigh them as one input):\n"
+                f"{precedent}"
+            )
         raw_text = self.anthropic_client.classify(
             system_prompt=system_prompt,
             user_prompt=user_prompt,

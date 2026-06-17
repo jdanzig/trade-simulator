@@ -7,6 +7,43 @@ from typing import Any
 from .database import Database
 from .embedding import EmbeddingProvider
 
+# Cap on how much current-event text we embed as the retrieval query, and
+# how much of each neighbor's headline we show back in the prompt.
+_QUERY_TEXT_CHARS = 1500
+_NEIGHBOR_TITLE_CHARS = 140
+
+
+def build_query_text(news_payload: dict[str, Any]) -> str:
+    """Collapse the current trigger's news items into a single query string.
+
+    The corpus embeds one vector per item; the query is one vector over the
+    whole current situation, so we concatenate item headlines (plus a short
+    body) the same way the corpus text was built, capped to keep the query
+    focused on the lede.
+    """
+    parts: list[str] = []
+    for item in [*news_payload.get("tier1", []), *news_payload.get("tier2", [])]:
+        title = (item.get("title") or "").strip()
+        body = (item.get("description") or item.get("body") or "").strip()
+        text = f"{title} {body[:200]}".strip()
+        if text:
+            parts.append(text)
+    return " | ".join(parts)[:_QUERY_TEXT_CHARS]
+
+
+def format_precedent_block(neighbors: list[dict[str, Any]]) -> str:
+    """Render retrieved neighbors as a prompt section: each headline plus
+    the stock's realized move over each matured window."""
+    lines: list[str] = []
+    for n in neighbors:
+        title = (n.get("title") or "(no headline)").strip()[:_NEIGHBOR_TITLE_CHARS]
+        moves = ", ".join(
+            f"{o['window_label']}: {float(o['return_pct']):+.1f}%"
+            for o in sorted(n.get("outcomes", []), key=lambda o: o["window_seconds"])
+        )
+        lines.append(f"- [{n['ticker']}] \"{title}\" -> {moves or 'n/a'}")
+    return "\n".join(lines)
+
 
 class RetrievalService:
     """Finds the most similar past news events to a query, with their

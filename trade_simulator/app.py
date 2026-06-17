@@ -18,6 +18,7 @@ from .dashboard import DashboardServer
 from .database import Database, TriggerCandidate
 from .embedding import EmbeddingProvider
 from .outcomes import OutcomeService, TriggerOutcomeService
+from .retrieval import RetrievalService
 from .market import EASTERN, MarketClock
 from .news import NewsFetcher
 from .providers import (
@@ -79,11 +80,13 @@ class TradeSimulatorApp:
         self.ntfy = NtfyClient(self.config.ntfy_topic, self.logger)
         self.embedding_provider = EmbeddingProvider(self.config.embedding_model, self.logger)
         self.news_fetcher = NewsFetcher(self.config, self.db, self.logger, self.embedding_provider)
+        self.retrieval = RetrievalService(self.db, self.embedding_provider, self.logger)
         self.classifier = ClassifierService(
             self.config,
             self.paths.classifier_prompt_path,
             self.anthropic_client,
             self.logger,
+            retrieval_service=self.retrieval,
         )
         self.simulation = SimulationService(self.config, self.db, self.market_data, self.logger, ntfy=self.ntfy)
         self.outcomes = OutcomeService(self.db, self.market_data, self.logger)
@@ -279,6 +282,7 @@ class TradeSimulatorApp:
                     news_maturity="overnight_settled",
                     news_payload=news_payload,
                     formatted_context=formatted_context,
+                    now=now,
                 )
             except ClassificationError as exc:
                 self.db.log_error("classifier", "pass3_classification_failed", repr(exc))
@@ -343,6 +347,7 @@ class TradeSimulatorApp:
                 news_maturity="settled",
                 news_payload=news_payload,
                 formatted_context=formatted_context,
+                now=now,
             )
         except ClassificationError as exc:
             self.db.log_error("classifier", "classification_failed", repr(exc))
