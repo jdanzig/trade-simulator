@@ -620,14 +620,18 @@ class NtfyClient:
                 f"{corpus.get('labeled_events', 0)} labeled"
             )
         sc = summary.get("scorecard")
-        if sc and sc.get("total"):
+        if sc and (sc.get("evaluated") or sc.get("budget_skipped")):
             lines.append("")
             lines.append(
-                f"Classifier ({sc['total']} scored): "
-                f"missed {sc['false_negatives']} winners, "
-                f"caught {sc['true_positives']}, "
-                f"bad buys {sc['false_positives']}"
+                f"Classifier ({sc.get('evaluated', 0)} eval): "
+                f"missed {sc.get('false_negatives', 0)} winners, "
+                f"caught {sc.get('true_positives', 0)}, "
+                f"bad buys {sc.get('false_positives', 0)}"
             )
+            if sc.get("budget_skipped_winners"):
+                lines.append(
+                    f"  +{sc['budget_skipped_winners']} winners never classified (budget)"
+                )
         return lines
 
     def notify_startup(self, universe: str, ticker_count: int, dashboard_port: int, summary: dict) -> None:

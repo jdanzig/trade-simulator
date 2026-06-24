@@ -1027,28 +1027,39 @@ class Database:
         """Confusion matrix of decision (bought vs passed) against the
         counterfactual outcome (would have hit target vs not).
 
-        'Bought' = final-pass recommendation was buy_candidate. The outcome
-        is the same for every trigger — the strategy's mechanical exit rules
-        applied to realized prices — so passed triggers that hit_target are
-        false negatives (missed winners) and bought ones that didn't are
-        false positives.
+        Only triggers the classifier actually evaluated count toward the
+        matrix. Triggers that were never classified (daily API budget
+        exhausted) are NOT classifier decisions, so lumping them into
+        "passed" would blame the model for a throughput limit — they're
+        reported separately as budget_skipped instead.
+
+        'Bought' = final-pass recommendation was buy_candidate. Among
+        evaluated triggers, a passed one that hit target is a false negative
+        (missed winner); a bought one that didn't is a false positive.
         """
         with self.connect() as conn:
             rows = conn.execute(
                 """
                 SELECT
-                    CASE WHEN (
+                    (
                         SELECT c.recommendation FROM classifications c
                         WHERE c.trigger_id = o.trigger_id
                         ORDER BY c.pass_number DESC LIMIT 1
-                    ) = 'buy_candidate' THEN 1 ELSE 0 END AS bought,
+                    ) AS final_rec,
                     o.hit_target
                 FROM trigger_outcomes o
                 """
             ).fetchall()
         tp = fp = fn = tn = 0
+        budget_skipped = budget_skipped_winners = 0
         for r in rows:
-            bought, hit = int(r["bought"]), int(r["hit_target"])
+            hit = int(r["hit_target"])
+            rec = r["final_rec"]
+            if rec is None:
+                budget_skipped += 1
+                budget_skipped_winners += hit
+                continue
+            bought = rec == "buy_candidate"
             if bought and hit:
                 tp += 1
             elif bought and not hit:
@@ -1057,13 +1068,16 @@ class Database:
                 fn += 1
             else:
                 tn += 1
-        total = tp + fp + fn + tn
+        evaluated = tp + fp + fn + tn
         return {
             "true_positives": tp,
             "false_positives": fp,
             "false_negatives": fn,
             "true_negatives": tn,
-            "total": total,
+            "evaluated": evaluated,
+            "budget_skipped": budget_skipped,
+            "budget_skipped_winners": budget_skipped_winners,
+            "total": evaluated + budget_skipped,
         }
 
     def corpus_stats(self) -> dict[str, int]:
