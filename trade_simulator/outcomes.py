@@ -102,10 +102,13 @@ class TriggerOutcomeService:
     hit target) and true negatives, completing the classifier scorecard the
     live position tracker can't see.
 
-    Entry is anchored at recheck_scheduled_at (the moment a real buy would
-    fill at the second pass) and the +target / max-hold-days exit is
-    evaluated on daily CLOSES, mirroring the once-daily eod_update_job —
-    not intraday highs, which would overstate capturable gains.
+    Both entry and exit are priced on daily CLOSES: entry at the close of
+    the first session at/after recheck_scheduled_at (when a real buy would
+    decide), exits at subsequent closes. Close-to-close is robust against
+    the sparse free IEX feed (a single intraday minute print can be a thin,
+    far-off-market quote that fabricates huge returns) and is consistent
+    with the once-daily eod_update_job. Intraday highs are deliberately not
+    used — they'd overstate what a once-a-day strategy could capture.
     """
 
     def __init__(
@@ -152,21 +155,24 @@ class TriggerOutcomeService:
             return False  # entry hasn't happened yet
         ticker = trigger["ticker"]
         window_end = entry_time + timedelta(days=self.max_hold_days)
-        entry_price = self.market_data_client.fetch_price_at(ticker, entry_time)
-        if not entry_price:
-            return False  # no price at entry yet; retry later
         closes = self.market_data_client.fetch_daily_closes(ticker, entry_time, min(now, window_end))
-        if not closes:
+        # Need the entry-day close plus at least one later close to have any
+        # holding period; otherwise wait for more data.
+        if len(closes) < 2:
             return False
+        entry_ts, entry_price = closes[0]
+        if not entry_price:
+            return False
+        holding = closes[1:]
         target_price = entry_price * (1 + self.target_return_pct / 100)
-        max_close = max(price for _, price in closes)
+        max_close = max(price for _, price in holding)
         max_close_return = round(((max_close - entry_price) / entry_price) * 100, 4)
 
         # First daily close at or above target → the strategy would have sold.
-        for ts, price in closes:
+        for ts, price in holding:
             if price >= target_price:
                 self._finalize(
-                    trigger["id"], entry_time, entry_price, ts, price,
+                    trigger["id"], entry_ts, entry_price, ts, price,
                     hit_target=True, exit_reason="target_reached",
                     max_close_return=max_close_return, now=now,
                 )
@@ -174,10 +180,10 @@ class TriggerOutcomeService:
 
         # No target hit. Only finalize once the full window has closed.
         if now >= window_end:
-            exit_ts, exit_price = closes[-1]
+            exit_ts, exit_price = holding[-1]
             ret = round(((exit_price - entry_price) / entry_price) * 100, 4)
             self._finalize(
-                trigger["id"], entry_time, entry_price, exit_ts, exit_price,
+                trigger["id"], entry_ts, entry_price, exit_ts, exit_price,
                 hit_target=False, exit_reason="max_hold_exceeded",
                 max_close_return=max_close_return, now=now, return_pct=ret,
             )

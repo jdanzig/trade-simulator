@@ -1016,6 +1016,13 @@ class Database:
                 ),
             )
 
+    def clear_trigger_outcomes(self) -> int:
+        """Delete all counterfactual outcomes so they can be recomputed after
+        a change to the outcome logic. Returns the number of rows removed."""
+        with self.connect() as conn:
+            cur = conn.execute("DELETE FROM trigger_outcomes")
+            return cur.rowcount
+
     def classifier_scorecard(self) -> dict[str, Any]:
         """Confusion matrix of decision (bought vs passed) against the
         counterfactual outcome (would have hit target vs not).
