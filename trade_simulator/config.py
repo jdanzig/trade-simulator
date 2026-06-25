@@ -54,7 +54,7 @@ class AppConfig:
     poll_interval_minutes: int = 5
     max_hold_days: int = 30
     target_return_pct: float = 15.0
-    daily_api_call_budget: int = 20
+    daily_api_call_budget: int = 40
     dashboard_port: int = 8080
     max_learned_prompt_tokens: int = 2000
     unusual_whales_enabled: bool = False

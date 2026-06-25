@@ -24,7 +24,7 @@ trigger_cooldown_hours: 4          # per-ticker cooldown after trigger
 poll_interval_minutes: 5           # how often price monitor runs
 max_hold_days: 30                  # auto-close hypothetical positions after N days
 target_return_pct: 15              # auto-close on reaching this return
-daily_api_call_budget: 20          # max Claude API calls per day
+daily_api_call_budget: 40          # max Claude API calls/day (~20 triggers; biggest drops prioritized)
 dashboard_port: 8080               # localhost dashboard port
 max_learned_prompt_tokens: 2000    # guardrail on classifier_prompt.md length
 unusual_whales_enabled: false      # optional Tier 3 smart-money signal

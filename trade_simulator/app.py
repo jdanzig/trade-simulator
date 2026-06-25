@@ -208,6 +208,10 @@ class TradeSimulatorApp:
         self._process_pending_positions(price_map, now)
         self.simulation.refresh_open_position_prices(price_map, now)
         todays_usage = self.db.get_today_api_usage(now.date())
+        # Collect qualifying dips first, then spend the classification budget
+        # on the biggest drops — a single morning of small dips shouldn't
+        # exhaust the budget before a larger afternoon capitulation is seen.
+        candidates = []
         for ticker, metrics in intraday.items():
             current_price = metrics["current_price"]
             intraday_high = metrics["intraday_high"]
@@ -218,6 +222,9 @@ class TradeSimulatorApp:
                 continue
             if self.db.is_in_cooldown(ticker, now):
                 continue
+            candidates.append((ticker, drop_pct, intraday_high, current_price))
+        candidates.sort(key=lambda c: c[1], reverse=True)
+        for ticker, drop_pct, intraday_high, current_price in candidates:
             recheck_time = self.clock.recheck_time(now)
             budget_status = "classified"
             if todays_usage + 2 > self.config.daily_api_call_budget:
