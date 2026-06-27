@@ -1016,6 +1016,45 @@ class Database:
                 ),
             )
 
+    def list_scored_triggers(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Triggers that have a counterfactual outcome AND were classified —
+        the replayable set for the retrieval A/B harness. Newest first."""
+        sql = """
+            SELECT t.id, t.ticker, t.triggered_at, t.recheck_scheduled_at,
+                   t.drop_pct, t.intraday_high, t.trigger_price,
+                   o.hit_target,
+                   (
+                     SELECT c.recommendation FROM classifications c
+                     WHERE c.trigger_id = t.id ORDER BY c.pass_number DESC LIMIT 1
+                   ) AS final_rec
+            FROM trigger_outcomes o
+            JOIN triggers t ON t.id = o.trigger_id
+            WHERE final_rec IS NOT NULL
+            ORDER BY t.triggered_at DESC
+        """
+        if limit:
+            sql += " LIMIT ?"
+        with self.connect() as conn:
+            rows = conn.execute(sql, (limit,) if limit else ()).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["triggered_at"] = _parse_iso(payload["triggered_at"])
+            payload["recheck_scheduled_at"] = _parse_iso(payload["recheck_scheduled_at"])
+            results.append(payload)
+        return results
+
+    def list_news_events_for_trigger(self, trigger_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source, tier, published_at, title, body
+                FROM news_events WHERE trigger_id = ? ORDER BY tier, id
+                """,
+                (trigger_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def clear_trigger_outcomes(self) -> int:
         """Delete all counterfactual outcomes so they can be recomputed after
         a change to the outcome logic. Returns the number of rows removed."""
