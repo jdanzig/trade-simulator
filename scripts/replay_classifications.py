@@ -67,6 +67,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=25, help="Max triggers to replay (0 = all).")
     parser.add_argument("--k", type=int, default=None, help="Override news_retrieval_k for the test.")
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Compute retrieval active/cold counts only — no Claude calls, no cost.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
@@ -81,13 +85,16 @@ def main() -> int:
     db = Database(paths.database_path)
     embedder = EmbeddingProvider(config.embedding_model, logger)
     retrieval = RetrievalService(db, embedder, logger)
-    anthropic = AnthropicClassifierClient(config, logger)
-    classifier = ClassifierService(
-        config, paths.classifier_prompt_path, anthropic, logger, retrieval_service=retrieval
-    )
+    classifier = None
+    if not args.dry_run:
+        anthropic = AnthropicClassifierClient(config, logger)
+        classifier = ClassifierService(
+            config, paths.classifier_prompt_path, anthropic, logger, retrieval_service=retrieval
+        )
 
     triggers = db.list_scored_triggers(limit=args.limit or None)
-    print(f"Replaying {len(triggers)} scored triggers (k={k})...\n")
+    mode = "DRY RUN (no Claude calls)" if args.dry_run else "replaying"
+    print(f"{mode}: {len(triggers)} scored triggers (k={k})...\n")
 
     rows = []
     for i, trig in enumerate(triggers, 1):
@@ -108,6 +115,13 @@ def main() -> int:
         )
         active = len(neighbors) >= k
 
+        if args.dry_run:
+            rows.append({"ticker": trig["ticker"], "hit": int(trig["hit_target"]),
+                         "active": active, "off": "", "on": "", "neighbors": len(neighbors)})
+            print(f"  [{i}/{len(triggers)}] {trig['ticker']:6} hit={int(trig['hit_target'])} "
+                  f"neighbors={len(neighbors):3} {'(active)' if active else '(cold)'}")
+            continue
+
         def run(flag: bool) -> str:
             classifier.config.news_retrieval_enabled = flag
             res = classifier.classify(
@@ -126,6 +140,20 @@ def main() -> int:
         flag = "*" if (active and rec_on != rec_off) else " "
         print(f"  [{i}/{len(triggers)}] {flag} {trig['ticker']:6} hit={int(trig['hit_target'])} "
               f"off={rec_off:13} on={rec_on:13} {'(active)' if active else '(cold)'}")
+
+    if args.dry_run:
+        active = sum(1 for r in rows if r["active"])
+        active_winners = sum(1 for r in rows if r["active"] and r["hit"])
+        print("\n" + "=" * 64)
+        print(f"Replayable (have persisted news): {len(rows)}")
+        print(f"Retrieval would be ACTIVE: {active}  (of which winners: {active_winners})")
+        print(f"Cold-start: {len(rows) - active}")
+        est_calls = (len(rows) - active) * 1 + active * 2
+        print(f"\nA real run would cost ~{est_calls} Claude calls.")
+        if active < k:
+            print("Too few active triggers to validate meaningfully yet — let the corpus mature.")
+        print("=" * 64)
+        return 0
 
     _report(rows, k)
     return 0
