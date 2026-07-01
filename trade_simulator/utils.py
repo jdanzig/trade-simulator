@@ -22,6 +22,33 @@ def chunked(values: Iterable[T], size: int) -> Iterator[list[T]]:
         yield batch
 
 
+def _retryable_status(result: Any) -> int | None:
+    """If the operation returned an HTTP response with a retryable status
+    (429 or 5xx), return that status; otherwise None.
+
+    Call sites use the pattern `response = with_retry(lambda: get(...))`
+    followed by raise_for_status, so a 429/5xx response never raises inside
+    the retry loop — without this check rate limits were never retried.
+    """
+    status = getattr(result, "status_code", None)
+    if status is not None and (status == 429 or status >= 500):
+        return int(status)
+    return None
+
+
+def _retry_after_seconds(result: Any) -> float | None:
+    headers = getattr(result, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return min(float(raw), 60.0)
+    except (TypeError, ValueError):
+        return None
+
+
 def with_retry(
     operation: Callable[[], T],
     *,
@@ -33,7 +60,7 @@ def with_retry(
     last_error: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
-            return operation()
+            result = operation()
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             if attempt >= retries:
@@ -48,6 +75,22 @@ def with_retry(
                 delay,
             )
             time.sleep(delay)
+            continue
+        status = _retryable_status(result)
+        if status is None:
+            return result
+        if attempt >= retries:
+            return result  # let the caller's raise_for_status surface it
+        delay = _retry_after_seconds(result) or base_delay_seconds * (2 ** (attempt - 1))
+        logger.warning(
+            "%s attempt %s/%s got HTTP %s. Retrying in %.1fs",
+            component,
+            attempt,
+            retries,
+            status,
+            delay,
+        )
+        time.sleep(delay)
     assert last_error is not None
     raise last_error
 

@@ -634,14 +634,26 @@ class NtfyClient:
                 )
         return lines
 
-    def notify_startup(self, universe: str, ticker_count: int, dashboard_port: int, summary: dict) -> None:
+    def notify_startup(
+        self,
+        universe: str,
+        ticker_count: int,
+        dashboard_port: int,
+        summary: dict,
+        recovered_from_crash: bool = False,
+    ) -> None:
         lines = [
             f"Universe: {universe} ({ticker_count} tickers)",
             f"Dashboard: http://127.0.0.1:{dashboard_port}",
             "",
         ]
+        if recovered_from_crash:
+            lines.insert(0, "Previous run did not shut down cleanly (crash or kill).")
+            lines.insert(1, "")
         lines.extend(self._format_summary_lines(summary))
-        self._post(title="Trade simulator started", message="\n".join(lines), tags=["rocket"])
+        title = "Trade simulator restarted after crash" if recovered_from_crash else "Trade simulator started"
+        tags = ["warning"] if recovered_from_crash else ["rocket"]
+        self._post(title=title, message="\n".join(lines), tags=tags)
 
     def notify_eod_summary(self, today: str, summary: dict) -> None:
         pnl = summary.get("pnl_today_sum", 0)

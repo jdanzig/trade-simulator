@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -143,6 +144,9 @@ class TriggerOutcomeService:
                     "trigger_outcomes", f"compute failed for {trigger.get('ticker')}", repr(exc)
                 )
                 self.logger.exception("Trigger outcome compute failed for %s", trigger.get("ticker"))
+            # Pace per-ticker bar fetches so a large unresolved backlog
+            # doesn't trip Alpaca's free-tier rate limit in one burst.
+            time.sleep(0.4)
         return finalized
 
     def _compute_single(self, trigger: dict[str, Any], now: datetime) -> bool:

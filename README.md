@@ -10,6 +10,20 @@ Long-running paper trading simulation that watches the S&P 500, Nasdaq-100, or b
 3. Start the daemon:
    `python3 main.py`
 
+## Run as a background service (macOS)
+
+Instead of keeping a terminal open, install the launchd agent — it starts
+the daemon at login and restarts it if it crashes (a crash restart is
+flagged in the startup ntfy ping):
+
+```bash
+cp deploy/com.trade-simulator.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.trade-simulator.plist
+```
+
+Logs go to `logs/daemon.log`. To stop it:
+`launchctl unload ~/Library/LaunchAgents/com.trade-simulator.plist`
+
 ## Runtime behavior
 
 - The same entry point handles first run and subsequent runs.

@@ -117,11 +117,17 @@ class TradeSimulatorApp:
             "Trade simulator started. Dashboard available at http://127.0.0.1:%s",
             self.config.dashboard_port,
         )
+        # If the previous run never marked a clean shutdown, it crashed (or
+        # was killed) — flag that in the startup ping so unattended restarts
+        # under launchd are visible.
+        crashed = self.db.get_state("clean_shutdown") == "0"
+        self.db.set_state("clean_shutdown", "0")
         self.ntfy.notify_startup(
             universe=self.config.universe,
             ticker_count=len(self.db.list_universe(self.config.universe)),
             dashboard_port=self.config.dashboard_port,
             summary=self.db.eod_summary(self.clock.now().date()),
+            recovered_from_crash=crashed,
         )
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -129,6 +135,7 @@ class TradeSimulatorApp:
 
     def _handle_signal(self, signum, frame) -> None:  # noqa: ANN001, ARG002
         self.logger.info("Received signal %s, shutting down.", signum)
+        self.db.set_state("clean_shutdown", "1")
         self.scheduler.shutdown(wait=False)
         self.shutdown_event.set()
 
