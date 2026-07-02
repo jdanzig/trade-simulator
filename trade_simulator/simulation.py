@@ -26,15 +26,24 @@ class SimulationService:
         if second_pass["recommendation"] != "buy_candidate":
             return
         ticker = trigger["ticker"]
+        # Recorded on the position so future sizing schemes (by confidence,
+        # overreaction score, drop depth) can be backtested against realized
+        # P&L instead of guessed. size_units stays 1.0 for every position
+        # until a sizing rule is validated.
+        signals = {
+            "entry_confidence": second_pass.get("confidence"),
+            "entry_overreaction_score": second_pass.get("overreaction_score"),
+            "entry_drop_pct": float(trigger["drop_pct"]),
+        }
         try:
             if market_is_open:
                 entry_price = self.market_data_client.fetch_latest_price(ticker)
-                self.db.create_position(trigger["id"], ticker, entry_price, now, status="open")
+                self.db.create_position(trigger["id"], ticker, entry_price, now, status="open", **signals)
             else:
                 # Queue for fill at next market open — matches what a real retail
                 # trader would do (market-on-open order) rather than chasing
                 # thin after-hours liquidity.
-                self.db.create_position(trigger["id"], ticker, 0.0, now, status="pending")
+                self.db.create_position(trigger["id"], ticker, 0.0, now, status="pending", **signals)
                 if self.ntfy:
                     self.ntfy._post(
                         title=f"{ticker} queued for next open",

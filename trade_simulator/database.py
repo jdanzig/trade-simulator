@@ -126,6 +126,10 @@ class Database:
                     exit_price REAL,
                     exit_reason TEXT,
                     status TEXT NOT NULL,
+                    size_units REAL NOT NULL DEFAULT 1.0,
+                    entry_confidence TEXT,
+                    entry_overreaction_score INTEGER,
+                    entry_drop_pct REAL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(trigger_id),
                     FOREIGN KEY (trigger_id) REFERENCES triggers(id) ON DELETE CASCADE
@@ -224,6 +228,20 @@ class Database:
                 f"CREATE VIRTUAL TABLE IF NOT EXISTS news_event_vec "
                 f"USING vec0(embedding float[{EMBEDDING_DIM}])"
             )
+            # Migrate pre-existing databases: CREATE TABLE IF NOT EXISTS
+            # won't add columns introduced after the table was first created.
+            existing = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(hypothetical_positions)")
+            }
+            for column, ddl in (
+                ("size_units", "size_units REAL NOT NULL DEFAULT 1.0"),
+                ("entry_confidence", "entry_confidence TEXT"),
+                ("entry_overreaction_score", "entry_overreaction_score INTEGER"),
+                ("entry_drop_pct", "entry_drop_pct REAL"),
+            ):
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE hypothetical_positions ADD COLUMN {ddl}")
 
     def log_error(self, component: str, error_message: str, raw_exception: str | None = None) -> None:
         with self.connect() as conn:
@@ -458,6 +476,10 @@ class Database:
         entry_price: float,
         entry_timestamp: datetime,
         status: str = "open",
+        *,
+        entry_confidence: str | None = None,
+        entry_overreaction_score: int | None = None,
+        entry_drop_pct: float | None = None,
     ) -> str:
         position_id = str(uuid.uuid4())
         with self.connect() as conn:
@@ -465,9 +487,10 @@ class Database:
                 """
                 INSERT INTO hypothetical_positions (
                     id, ticker, trigger_id, hypothetical_entry_price, entry_timestamp,
-                    current_price, hypothetical_pnl_pct, days_held, status
+                    current_price, hypothetical_pnl_pct, days_held, status,
+                    size_units, entry_confidence, entry_overreaction_score, entry_drop_pct
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 1.0, ?, ?, ?)
                 ON CONFLICT(trigger_id) DO NOTHING
                 """,
                 (
@@ -478,6 +501,9 @@ class Database:
                     _as_eastern_iso(entry_timestamp),
                     entry_price,
                     status,
+                    entry_confidence,
+                    entry_overreaction_score,
+                    entry_drop_pct,
                 ),
             )
         return position_id
