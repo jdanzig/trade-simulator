@@ -73,6 +73,7 @@ class Database:
                     universe TEXT NOT NULL,
                     active INTEGER NOT NULL DEFAULT 1,
                     refreshed_at TEXT NOT NULL,
+                    sector TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (ticker, universe)
                 );
 
@@ -130,6 +131,7 @@ class Database:
                     entry_confidence TEXT,
                     entry_overreaction_score INTEGER,
                     entry_drop_pct REAL,
+                    entry_volatility_pct REAL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(trigger_id),
                     FOREIGN KEY (trigger_id) REFERENCES triggers(id) ON DELETE CASCADE
@@ -239,9 +241,15 @@ class Database:
                 ("entry_confidence", "entry_confidence TEXT"),
                 ("entry_overreaction_score", "entry_overreaction_score INTEGER"),
                 ("entry_drop_pct", "entry_drop_pct REAL"),
+                ("entry_volatility_pct", "entry_volatility_pct REAL"),
             ):
                 if column not in existing:
                     conn.execute(f"ALTER TABLE hypothetical_positions ADD COLUMN {ddl}")
+            universe_cols = {
+                row["name"] for row in conn.execute("PRAGMA table_info(universe_tickers)")
+            }
+            if "sector" not in universe_cols:
+                conn.execute("ALTER TABLE universe_tickers ADD COLUMN sector TEXT NOT NULL DEFAULT ''")
 
     def log_error(self, component: str, error_message: str, raw_exception: str | None = None) -> None:
         with self.connect() as conn:
@@ -295,14 +303,15 @@ class Database:
             for entry in entries:
                 conn.execute(
                     """
-                    INSERT INTO universe_tickers (ticker, company_name, universe, active, refreshed_at)
-                    VALUES (?, ?, ?, 1, ?)
+                    INSERT INTO universe_tickers (ticker, company_name, universe, active, refreshed_at, sector)
+                    VALUES (?, ?, ?, 1, ?, ?)
                     ON CONFLICT(ticker, universe) DO UPDATE SET
                         company_name = excluded.company_name,
                         active = 1,
-                        refreshed_at = excluded.refreshed_at
+                        refreshed_at = excluded.refreshed_at,
+                        sector = excluded.sector
                     """,
-                    (entry["ticker"], entry["company_name"], universe, timestamp),
+                    (entry["ticker"], entry["company_name"], universe, timestamp, entry.get("sector", "")),
                 )
 
     def list_universe(self, universe: str) -> list[dict[str, Any]]:
@@ -480,6 +489,7 @@ class Database:
         entry_confidence: str | None = None,
         entry_overreaction_score: int | None = None,
         entry_drop_pct: float | None = None,
+        entry_volatility_pct: float | None = None,
     ) -> str:
         position_id = str(uuid.uuid4())
         with self.connect() as conn:
@@ -488,9 +498,10 @@ class Database:
                 INSERT INTO hypothetical_positions (
                     id, ticker, trigger_id, hypothetical_entry_price, entry_timestamp,
                     current_price, hypothetical_pnl_pct, days_held, status,
-                    size_units, entry_confidence, entry_overreaction_score, entry_drop_pct
+                    size_units, entry_confidence, entry_overreaction_score, entry_drop_pct,
+                    entry_volatility_pct
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 1.0, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 1.0, ?, ?, ?, ?)
                 ON CONFLICT(trigger_id) DO NOTHING
                 """,
                 (
@@ -504,6 +515,7 @@ class Database:
                     entry_confidence,
                     entry_overreaction_score,
                     entry_drop_pct,
+                    entry_volatility_pct,
                 ),
             )
         return position_id
@@ -1041,6 +1053,34 @@ class Database:
                     _as_eastern_iso(computed_at),
                 ),
             )
+
+    def get_ticker_sector(self, ticker: str) -> str:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT sector FROM universe_tickers
+                WHERE ticker = ? AND active = 1 AND sector != ''
+                LIMIT 1
+                """,
+                (ticker,),
+            ).fetchone()
+        return row["sector"] if row else ""
+
+    def count_open_positions_in_sector(self, sector: str) -> int:
+        """Open + pending positions whose ticker belongs to the given sector.
+        DISTINCT because a ticker can appear in both sp500 and nasdaq100
+        universe rows."""
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT p.id) AS n
+                FROM hypothetical_positions p
+                JOIN universe_tickers u ON u.ticker = p.ticker AND u.active = 1
+                WHERE p.status IN ('open', 'pending') AND u.sector = ?
+                """,
+                (sector,),
+            ).fetchone()
+        return int(row["n"])
 
     def list_scored_triggers(self, limit: int | None = None) -> list[dict[str, Any]]:
         """Triggers that have a counterfactual outcome AND were classified —

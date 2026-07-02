@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from .config import AppConfig
@@ -26,14 +26,17 @@ class SimulationService:
         if second_pass["recommendation"] != "buy_candidate":
             return
         ticker = trigger["ticker"]
+        if not self._passes_portfolio_caps(ticker, now):
+            return
         # Recorded on the position so future sizing schemes (by confidence,
-        # overreaction score, drop depth) can be backtested against realized
-        # P&L instead of guessed. size_units stays 1.0 for every position
-        # until a sizing rule is validated.
+        # overreaction score, drop depth, volatility) can be backtested
+        # against realized P&L instead of guessed. size_units stays 1.0 for
+        # every position until a sizing rule is validated.
         signals = {
             "entry_confidence": second_pass.get("confidence"),
             "entry_overreaction_score": second_pass.get("overreaction_score"),
             "entry_drop_pct": float(trigger["drop_pct"]),
+            "entry_volatility_pct": self._recent_volatility_pct(ticker, now),
         }
         try:
             if market_is_open:
@@ -53,6 +56,55 @@ class SimulationService:
         except Exception as exc:  # noqa: BLE001
             self.db.log_error("simulation", f"Failed to create position for {ticker}", repr(exc))
             self.logger.exception("Failed to create position for %s", ticker)
+
+    def _passes_portfolio_caps(self, ticker: str, now: datetime) -> bool:
+        """Concentration guards, both disabled by default (config value 0).
+
+        These are portfolio-level rules, deliberately separate from the
+        classifier: a blocked buy still keeps its buy_candidate
+        classification, so the scorecard measures the model while these caps
+        shape the (hypothetical) book.
+        """
+        if self.config.max_new_positions_per_day > 0:
+            entered_today = self.db.count_positions_entered_on(now.date())
+            if entered_today >= self.config.max_new_positions_per_day:
+                self.logger.info(
+                    "Skipping %s: daily entry cap reached (%s)", ticker, entered_today
+                )
+                return False
+        if self.config.max_positions_per_sector > 0:
+            sector = self.db.get_ticker_sector(ticker)
+            if sector:
+                in_sector = self.db.count_open_positions_in_sector(sector)
+                if in_sector >= self.config.max_positions_per_sector:
+                    self.logger.info(
+                        "Skipping %s: sector cap reached for %s (%s open)",
+                        ticker, sector, in_sector,
+                    )
+                    return False
+        return True
+
+    def _recent_volatility_pct(self, ticker: str, now: datetime) -> float | None:
+        """Std dev of daily close-to-close returns (%) over ~20 sessions.
+        None on any failure — the signal is recorded best-effort and must
+        never block a position."""
+        try:
+            closes = self.market_data_client.fetch_daily_closes(
+                ticker, now - timedelta(days=45), now
+            )
+            prices = [price for _, price in closes][-21:]
+            if len(prices) < 10:
+                return None
+            returns = [
+                ((later - earlier) / earlier) * 100
+                for earlier, later in zip(prices, prices[1:])
+            ]
+            mean = sum(returns) / len(returns)
+            variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+            return round(variance**0.5, 4)
+        except Exception:  # noqa: BLE001
+            self.logger.warning("Volatility fetch failed for %s", ticker, exc_info=True)
+            return None
 
     def fill_pending_position(self, position_id: str, ticker: str, entry_price: float, now: datetime) -> None:
         self.db.fill_pending_position(position_id, entry_price, now)

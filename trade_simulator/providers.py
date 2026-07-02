@@ -60,21 +60,29 @@ class UniverseProvider:
         tables = pd.read_html(StringIO(response.text))
         if universe == "sp500":
             table = tables[0]
+            sectors = table["GICS Sector"] if "GICS Sector" in table.columns else [""] * len(table)
             return [
                 {
                     "ticker": ticker,
                     "company_name": security,
+                    "sector": str(sector) if pd.notna(sector) else "",
                 }
-                for ticker, security in zip(table["Symbol"], table["Security"], strict=True)
+                for ticker, security, sector in zip(
+                    table["Symbol"], table["Security"], sectors, strict=True
+                )
             ]
         for table in tables:
             if {"Ticker", "Company"}.issubset(set(table.columns)):
+                sectors = table["GICS Sector"] if "GICS Sector" in table.columns else [""] * len(table)
                 return [
                     {
                         "ticker": ticker,
                         "company_name": company,
+                        "sector": str(sector) if pd.notna(sector) else "",
                     }
-                    for ticker, company in zip(table["Ticker"], table["Company"], strict=True)
+                    for ticker, company, sector in zip(
+                        table["Ticker"], table["Company"], sectors, strict=True
+                    )
                 ]
         raise RuntimeError("Unable to parse Nasdaq-100 constituents from source page.")
 

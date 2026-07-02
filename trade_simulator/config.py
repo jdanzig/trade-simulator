@@ -47,6 +47,8 @@ class AppConfig:
     outcome_windows: list[str] = field(default_factory=lambda: ["1h", "1d"])
     news_retrieval_enabled: bool = False
     news_retrieval_k: int = 5
+    max_positions_per_sector: int = 0
+    max_new_positions_per_day: int = 0
     universe: str = "sp500"
     blocklist: list[str] = field(default_factory=list)
     drop_threshold_pct: float = 5.0
