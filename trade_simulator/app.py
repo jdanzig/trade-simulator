@@ -170,6 +170,13 @@ class TradeSimulatorApp:
             id="compute_outcomes",
             replace_existing=True,
         )
+        self.scheduler.add_job(
+            self._safe_run,
+            CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=EASTERN.key),
+            kwargs={"component": "morning_brief", "fn": self.morning_brief_job},
+            id="morning_brief",
+            replace_existing=True,
+        )
 
     def _resume_pending_rechecks(self) -> None:
         now = self.clock.now()
@@ -379,6 +386,29 @@ class TradeSimulatorApp:
             recommendation=finalized.get("recommendation", ""),
             confidence=finalized.get("confidence", ""),
             summary=finalized.get("cause_summary", ""),
+        )
+
+    def morning_brief_job(self) -> None:
+        now = self.clock.now()
+        today = now.date()
+        if not self.clock.is_trading_day(today):
+            return
+        yesterday_triggers = []
+        # Walk back to the previous trading day so Monday reports Friday.
+        probe = today - timedelta(days=1)
+        for _ in range(7):
+            if self.clock.is_trading_day(probe):
+                yesterday_triggers = self.db.list_triggers_for_date(probe)
+                break
+            probe -= timedelta(days=1)
+        self.ntfy.notify_morning_brief(
+            today.isoformat(),
+            open_positions=self.db.list_open_positions(),
+            pending_positions=self.db.list_pending_positions(),
+            triggers_yesterday=len(yesterday_triggers),
+            classified_yesterday=sum(
+                1 for t in yesterday_triggers if t["budget_status"] == "classified"
+            ),
         )
 
     def compute_outcomes_job(self) -> None:

@@ -663,6 +663,38 @@ class NtfyClient:
         tags = ["warning"] if recovered_from_crash else ["rocket"]
         self._post(title=title, message="\n".join(lines), tags=tags)
 
+    def notify_morning_brief(
+        self,
+        today: str,
+        *,
+        open_positions: list[dict],
+        pending_positions: list[dict],
+        triggers_yesterday: int,
+        classified_yesterday: int,
+    ) -> None:
+        lines: list[str] = []
+        if open_positions:
+            pnls = [float(p["hypothetical_pnl_pct"]) for p in open_positions]
+            avg = sum(pnls) / len(pnls)
+            best = max(open_positions, key=lambda p: float(p["hypothetical_pnl_pct"]))
+            worst = min(open_positions, key=lambda p: float(p["hypothetical_pnl_pct"]))
+            lines.append(f"Open ({len(open_positions)}): avg {avg:+.2f}%")
+            lines.append(
+                f"  best {best['ticker']} {float(best['hypothetical_pnl_pct']):+.2f}%, "
+                f"worst {worst['ticker']} {float(worst['hypothetical_pnl_pct']):+.2f}%"
+            )
+        else:
+            lines.append("No open positions.")
+        if pending_positions:
+            tickers = ", ".join(p["ticker"] for p in pending_positions)
+            lines.append(f"Filling at open ({len(pending_positions)}): {tickers}")
+        lines.append(f"Yesterday: {triggers_yesterday} triggers, {classified_yesterday} classified")
+        self._post(
+            title=f"Morning brief — {today}",
+            message="\n".join(lines),
+            tags=["sunrise"],
+        )
+
     def notify_eod_summary(self, today: str, summary: dict) -> None:
         pnl = summary.get("pnl_today_sum", 0)
         tag = "chart_with_upwards_trend" if pnl > 0 else "chart_with_downwards_trend" if pnl < 0 else "bar_chart"
