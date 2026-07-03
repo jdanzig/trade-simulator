@@ -26,6 +26,12 @@ class SimulationService:
         if second_pass["recommendation"] != "buy_candidate":
             return
         ticker = trigger["ticker"]
+        # A stock that keeps falling re-triggers every day (cooldown only
+        # spans hours), which stacked multiple positions in the same falling
+        # name — uncapped averaging-down. One position per ticker at a time.
+        if self.db.has_open_position(ticker):
+            self.logger.info("Skipping %s: already holding an open/pending position", ticker)
+            return
         if not self._passes_portfolio_caps(ticker, now):
             return
         # Recorded on the position so future sizing schemes (by confidence,

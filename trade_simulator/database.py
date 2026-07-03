@@ -1054,6 +1054,18 @@ class Database:
                 ),
             )
 
+    def has_open_position(self, ticker: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM hypothetical_positions
+                WHERE ticker = ? AND status IN ('open', 'pending')
+                LIMIT 1
+                """,
+                (ticker,),
+            ).fetchone()
+        return row is not None
+
     def get_ticker_sector(self, ticker: str) -> str:
         with self.connect() as conn:
             row = conn.execute(
