@@ -219,6 +219,7 @@ class Database:
                     hit_target INTEGER NOT NULL,
                     exit_reason TEXT NOT NULL,
                     max_close_return_pct REAL NOT NULL,
+                    benchmark_return_pct REAL,
                     computed_at TEXT NOT NULL,
                     FOREIGN KEY (trigger_id) REFERENCES triggers(id) ON DELETE CASCADE
                 );
@@ -250,6 +251,11 @@ class Database:
             }
             if "sector" not in universe_cols:
                 conn.execute("ALTER TABLE universe_tickers ADD COLUMN sector TEXT NOT NULL DEFAULT ''")
+            outcome_cols = {
+                row["name"] for row in conn.execute("PRAGMA table_info(trigger_outcomes)")
+            }
+            if "benchmark_return_pct" not in outcome_cols:
+                conn.execute("ALTER TABLE trigger_outcomes ADD COLUMN benchmark_return_pct REAL")
 
     def log_error(self, component: str, error_message: str, raw_exception: str | None = None) -> None:
         with self.connect() as conn:
@@ -1029,15 +1035,17 @@ class Database:
         exit_reason: str,
         max_close_return_pct: float,
         computed_at: datetime,
+        benchmark_return_pct: float | None = None,
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO trigger_outcomes (
                     trigger_id, entry_time, entry_price, exit_time, exit_price,
-                    return_pct, hit_target, exit_reason, max_close_return_pct, computed_at
+                    return_pct, hit_target, exit_reason, max_close_return_pct,
+                    benchmark_return_pct, computed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(trigger_id) DO NOTHING
                 """,
                 (
@@ -1050,6 +1058,7 @@ class Database:
                     1 if hit_target else 0,
                     exit_reason,
                     max_close_return_pct,
+                    benchmark_return_pct,
                     _as_eastern_iso(computed_at),
                 ),
             )

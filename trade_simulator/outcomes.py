@@ -194,6 +194,22 @@ class TriggerOutcomeService:
             return True
         return False  # still open, no verdict yet
 
+    def _benchmark_return_pct(self, entry_time: datetime, exit_time: datetime) -> float | None:
+        """SPY's close-to-close return over the same holding window, so each
+        outcome can be read as excess-over-market rather than raw return.
+        Best-effort: None on any failure."""
+        try:
+            closes = self.market_data_client.fetch_daily_closes(
+                "SPY", entry_time, exit_time + timedelta(days=1)
+            )
+            if len(closes) < 2:
+                return None
+            first, last = closes[0][1], closes[-1][1]
+            return round(((last - first) / first) * 100, 4)
+        except Exception:  # noqa: BLE001
+            self.logger.warning("SPY benchmark fetch failed", exc_info=True)
+            return None
+
     def _finalize(
         self, trigger_id, entry_time, entry_price, exit_time, exit_price,
         *, hit_target, exit_reason, max_close_return, now, return_pct=None,
@@ -211,4 +227,5 @@ class TriggerOutcomeService:
             exit_reason=exit_reason,
             max_close_return_pct=max_close_return,
             computed_at=now,
+            benchmark_return_pct=self._benchmark_return_pct(entry_time, exit_time),
         )
