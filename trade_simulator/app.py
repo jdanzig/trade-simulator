@@ -108,7 +108,9 @@ class TradeSimulatorApp:
 
     def run(self) -> None:
         self.validate_startup()
-        self.refresh_universe()
+        # ponytail: universe is cached in the DB and refreshes weekly; a
+        # source hiccup must not take down a daemon holding live positions.
+        self._safe_run(component="refresh_universe", fn=self.refresh_universe)
         self.dashboard.start()
         self._register_jobs()
         self._resume_pending_rechecks()
