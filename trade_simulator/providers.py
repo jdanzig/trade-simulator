@@ -43,11 +43,23 @@ class UniverseProvider:
         if universe == "both":
             seen: set[str] = set()
             combined: list[dict[str, str]] = []
+            failed: list[str] = []
             for u in ("sp500", "nasdaq100"):
-                for entry in self.fetch(u):
+                try:
+                    entries = self.fetch(u)
+                except Exception as exc:  # noqa: BLE001
+                    # One source breaking (e.g. Wikipedia dropped its
+                    # Nasdaq-100 table) must not discard the other's refresh.
+                    # Constituents are cached in the DB and change rarely.
+                    self.logger.warning("Universe fetch failed for %s: %s", u, exc)
+                    failed.append(u)
+                    continue
+                for entry in entries:
                     if entry["ticker"] not in seen:
                         seen.add(entry["ticker"])
                         combined.append(entry)
+            if not combined:
+                raise RuntimeError(f"All universe sources failed: {failed}")
             return combined
         if universe not in self.SOURCES:
             raise ValueError(f"Unsupported universe: {universe}")
